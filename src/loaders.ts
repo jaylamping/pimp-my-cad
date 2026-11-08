@@ -8,7 +8,7 @@ import { load3MF } from './load3mf';
 // so re-converting the same STEP (new converter, finer mesh) keeps comments current.
 export type Loaded = { root: THREE.Group; upAxis: 'y' | 'z'; rev?: string; note?: string };
 
-const STEP_GENERATOR = 'pimp-my-cad step2glb';
+const STEP_GENERATORS = ['tandemcad step2glb'];
 
 const baseName = (n: string) => n.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, '');
 
@@ -40,7 +40,7 @@ async function loadGlb(buf: ArrayBuffer, fileName: string): Promise<Loaded> {
   const root = new THREE.Group();
   root.name = baseName(fileName);
   const asset = gltf.asset as { generator?: string; extras?: { source?: { sha256?: string } } };
-  const ours = !!asset.generator?.startsWith(STEP_GENERATOR);
+  const ours = !!STEP_GENERATORS.some((g) => asset.generator?.startsWith(g));
   gltf.scene.traverse((o) => {
     if ((o as THREE.Mesh).isMesh) o.userData.kind ??= 'part';
     // GLTFLoader rewrites names to be unique across the whole file ("bracket-1_1")
