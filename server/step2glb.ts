@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const script = resolve(here, '../tools/step2glb/step2glb.py');
 const cacheDir = resolve(here, '../node_modules/.cache/step2glb');
-const python = process.env.TANDEMCAD_PYTHON || process.env.PIMP_PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
+const python = process.env.TANDEMCAD_PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
 // a new converter version gets a fresh cache
 const scriptHash = createHash('sha256').update(readFileSync(script)).digest('hex').slice(0, 12);
 const MAX_BYTES = 512 * 1024 * 1024;

@@ -1,6 +1,6 @@
 # Desktop app (Tauri 2)
 
-TandemCAD (formerly pimp-my-cad) is a local desktop app. Decisions (Joey, 2026-11-08): Tauri shell, files stay where they are, no database server, no hosted storage, mobile shelved.
+TandemCAD is a local desktop app. Decisions (Joey, 2026-11-08): Tauri shell, files stay where they are, no database server, no hosted storage, mobile shelved.
 
 ## Pieces
 
