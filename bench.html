@@ -19,6 +19,8 @@
           <label class="btn">Open part…<input id="openPart" type="file" accept=".stl,.3mf" multiple hidden /></label>
           <label class="btn" title="Adds an older revision of the selected part for the distance check">Open older revision…<input id="openRev" type="file" accept=".stl,.3mf" hidden /></label>
         </div>
+        <label title="Which 3D renderer draws the part. The compute engines below are separate and unaffected.">3D renderer
+          <select id="display"><option value="auto">Auto (WebGPU if available)</option><option value="webgl">WebGL2</option></select></label>
         <label>Older revision (distance) <select id="rev"></select></label>
         <label title="Splits every triangle into k² pieces: more samples and more triangles, same shape">Subdivide k
           <select id="k"><option>1</option><option>2</option><option>3</option><option>4</option><option>6</option><option>8</option></select></label>

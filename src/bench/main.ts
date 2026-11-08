@@ -136,7 +136,7 @@ async function ensureLoaded(): Promise<{ B: Prepared; A: Prepared | null }> {
 
 function median(a: number[]) { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; }
 
-async function measure(fn: () => Promise<Float32Array>, runs: number): Promise<{ v: Float32Array; cold: number; warm: number; gpu: number | null }> {
+async function measure(fn: () => Promise<Float32Array>, runs: number, gpuTimed: boolean): Promise<{ v: Float32Array; cold: number; warm: number; gpu: number | null }> {
   let t = performance.now();
   let v = await fn();
   const cold = performance.now() - t;
@@ -148,7 +148,7 @@ async function measure(fn: () => Promise<Float32Array>, runs: number): Promise<{
     t = performance.now();
     v = await fn();
     warm.push(performance.now() - t);
-    gpu = tsl?.lastGpuMs ?? null;
+    gpu = gpuTimed ? (tsl?.lastGpuMs ?? null) : null; // timestamp queries only exist for three's dispatches
   }
   return { v, cold, warm: warm.length ? median(warm) : cold, gpu };
 }
@@ -188,7 +188,7 @@ async function runRow(ctx: Ctx, row: Row, fn: () => Promise<Float32Array>, ref: 
   status(`${row.workload} · ${row.engine} · ${row.algo} · ${row.samples.toLocaleString()} samples…`);
   await tick();
   try {
-    const m = await measure(fn, ctx.runs);
+    const m = await measure(fn, ctx.runs, row.engine === 'tsl');
     row.coldMs = m.cold; row.warmMs = m.warm; row.gpuMs = m.gpu;
     compare(row, m.v, ref, idx, row.workload === 'distance');
     if (!idx) row.values = m.v;
@@ -400,6 +400,10 @@ function resultsJSON(env: Record<string, unknown>) {
 async function main() {
   engineChecks();
   const forceWebGL = params.has('webgl') || !('gpu' in navigator);
+  const dsel = $<HTMLSelectElement>('display');
+  dsel.value = params.get('display') === 'webgl' || params.has('webgl') ? 'webgl' : 'auto';
+  // the renderer is created once at startup, so switching reloads the page with ?display=...
+  dsel.onchange = () => { const q = new URLSearchParams(location.search); q.delete('webgl'); q.delete('auto'); if (dsel.value === 'webgl') q.set('display', 'webgl'); else q.delete('display'); location.search = q.toString(); };
   let device: GPUDevice | undefined;
   if (!forceWebGL && !params.has('separate-devices')) {
     try { device = await sharedDevice(); } catch (e) { console.warn('shared device failed', e); }
