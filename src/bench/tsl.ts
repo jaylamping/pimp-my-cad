@@ -217,8 +217,16 @@ export class TslRunner {
     });
   }
 
+  /** Frees every GPU buffer this runner created. The sweep calls it between sizes: without it each
+   *  size's buffers (hundreds of MB at k=6+) stay alive for the whole session. */
   dispose() {
-    for (const j of this.jobs.values()) j.kernel.dispose?.();
+    const backend = this.renderer.backend as unknown as { destroyAttribute?: (a: unknown) => void };
+    for (const j of this.jobs.values()) {
+      j.kernel.dispose?.();
+      for (const b of [j.out, ...j.inputs]) backend.destroyAttribute?.(b.attr);
+    }
     this.jobs.clear();
+    for (const d of this.bvhCache.values()) (d as unknown as { dispose(): void }).dispose(); // missing from the .d.ts
+    this.bvhCache.clear();
   }
 }
