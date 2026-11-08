@@ -141,6 +141,8 @@ export function load3MF(buf: ArrayBuffer, fileName: string): THREE.Group {
   // Bed coordinates are Z-up and centred at (128,128); re-centre on the bed origin.
   const box = new THREE.Box3().setFromObject(group);
   const c = box.getCenter(new THREE.Vector3());
-  for (const ch of group.children) ch.position.sub(new THREE.Vector3(c.x, c.y, box.min.z));
+  const shift = new THREE.Vector3(c.x, c.y, box.min.z);
+  for (const ch of group.children) ch.position.sub(shift);
+  group.userData.recenter = shift.toArray(); // print checks undo this so revisions share one frame
   return group;
 }
