@@ -2250,7 +2250,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pimp-my-cad"
+name = "tandemcad"
 version = "0.1.0"
 dependencies = [
  "notify",

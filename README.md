@@ -58,7 +58,7 @@ npm run test:step
 
 Over plain http on the LAN the phone isn't a "secure context": the app falls back to a JS SHA-256 for revisions, but browser features that need https (WebGPU, clipboard, service workers) stay off. For those, serve https (e.g. Tailscale `tailscale serve` or mkcert).
 
-If the Python with `cadquery-ocp` isn't `python3` (`python` on Windows), set `PIMP_PYTHON` to it.
+If the Python with `cadquery-ocp` isn't `python3` (`python` on Windows), set `TANDEMCAD_PYTHON` to it.
 
 Point the library at your own files with `public/library.local.json` (gitignored, same shape as `public/library.example.json`) and put the files under `public/samples/` (also gitignored).
 
