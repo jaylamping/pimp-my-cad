@@ -15,7 +15,6 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
-    "externalBin": ["binaries/step2glb"]
+    "targets": "all"
   }
 }
