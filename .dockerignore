@@ -1,0 +1,7 @@
+node_modules
+dist
+.git
+public/samples
+public/library.local.json
+**/__pycache__
+.env

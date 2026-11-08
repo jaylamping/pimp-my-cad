@@ -4,3 +4,5 @@ public/library.local.json
 public/samples
 vite.log
 __pycache__/
+.env
+cad-import
