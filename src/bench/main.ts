@@ -1,4 +1,5 @@
 import './bench.css';
+import * as THREE from 'three';
 import { loadMesh, subdivide, prepare, strideSamples, type Prepared } from './mesh';
 import { buildThreadedBVH, type ThreadedBVH } from './bvh';
 import { bvhFor, overhangCPU, wallCPU, distanceCPU, WALL_MAX } from './cpu';
@@ -32,10 +33,16 @@ type Row = {
   coldMs?: number; warmMs?: number; gpuMs?: number | null; prepMs?: number;
   maxErr?: number; p99Err?: number; okPct?: number; signPct?: number;
   ranOn?: string; error?: string;
+  /** which part / older revision / size this row was measured on (also what the JSON export records) */
+  part?: string; rev?: string; meshKey?: string;
   values?: Float32Array; // only for full-sample rows, so they can be painted
 };
 
 const rows: Row[] = [];
+/** Names come from file names, so they are escaped before going into innerHTML. */
+const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+/** Every row is stamped with the mesh it was measured on, so it can't be painted onto another one. */
+const pushRow = (r: Row) => { if (current) { r.part = current.B.name; r.rev = current.A?.name; r.meshKey = current.key; } rows.push(r); };
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const params = new URLSearchParams(location.search);
 
@@ -70,7 +77,7 @@ async function loadLibrary() {
 }
 function fillParts(select?: number) {
   const sel = $<HTMLSelectElement>('mesh');
-  sel.innerHTML = library.length ? library.map((m, i) => `<option value="${i}">${m.name}</option>`).join('') : '<option value="-1">(none: open a part)</option>';
+  sel.innerHTML = library.length ? library.map((m, i) => `<option value="${i}">${esc(m.name)}</option>`).join('') : '<option value="-1">(none: open a part)</option>';
   if (select != null) sel.value = String(select);
 }
 /** Files picked from disk. Blob URLs keep them in the browser; nothing is uploaded. */
@@ -94,8 +101,15 @@ function fillRevisions() {
   const m = library[+$<HTMLSelectElement>('mesh').value];
   const revs = m?.revisions ?? [];
   $<HTMLSelectElement>('rev').innerHTML = revs.length
-    ? revs.map((r, i) => `<option value="${i}">${r.name}</option>`).join('')
+    ? revs.map((r, i) => `<option value="${i}">${esc(r.name)}</option>`).join('')
     : '<option value="-1">same part, shifted 0.3 mm in Z (no revisions listed)</option>';
+}
+
+/** Frees everything tied to the current mesh: TSL buffers + BVH, gpu.js runners and kernels. */
+function releaseGpu() {
+  tsl?.dispose();
+  for (const g of gpujs.values()) g.destroy();
+  gpujs.clear();
 }
 
 function status(s: string) { $('status').textContent = s; }
@@ -111,6 +125,7 @@ async function ensureLoaded(): Promise<{ B: Prepared; A: Prepared | null }> {
   const ri = +$<HTMLSelectElement>('rev').value;
   const key = `${m.url}|${ri}|${k}`;
   if (current?.key === key) return current;
+  releaseGpu(); // the previous part / size is about to be replaced: free its buffers, kernels and results
   status(`Loading ${m.name}…`);
   const B = prepare(subdivide(await loadMesh(m.url, m.fileName), k), m.name);
   let A: Prepared | null = null;
@@ -119,11 +134,12 @@ async function ensureLoaded(): Promise<{ B: Prepared; A: Prepared | null }> {
   } else {
     // no older revision: compare against the same part nudged 0.3 mm up, so the check still has
     // something to measure (every sample should read about -0.3 mm)
-    const g = subdivide(await loadMesh(m.url, m.fileName), k);
+    const g = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(B.tris.slice(), 3));
     g.translate(0, 0, 0.3);
     A = prepare(g, `${m.name} +0.3 mm Z`);
   }
   current = { key, B, A };
+  for (const r of rows) if (r.meshKey !== key) delete r.values; // other parts' results can no longer be painted
   view.show(B);
   view.paint(B, null, null);
   shown = null;
@@ -159,7 +175,7 @@ function compare(row: Row, v: Float32Array, ref: Float32Array, idx?: Uint32Array
   let ok = 0, sign = 0;
   for (let i = 0; i < n; i++) {
     const r = ref[idx ? idx[i] : i];
-    const e = signed ? Math.abs(Math.abs(v[i]) - Math.abs(r)) : Math.abs(v[i] - r);
+    const e = Math.abs(v[i] - r); // signed distance is compared signed: a +5 mm vs -5 mm flip is a 10 mm error
     errs[i] = Number.isFinite(e) ? e : 1e9;
     if (errs[i] <= 0.01) ok++;
     if (signed && (Math.abs(r) < 1e-3 || Math.sign(v[i]) === Math.sign(r))) sign++;
@@ -176,14 +192,14 @@ type Ctx = {
   refs: Partial<Record<Workload, Float32Array>>;
   sub: ReturnType<typeof strideSamples>;
   tbvhB?: ThreadedBVH; tbvhA?: ThreadedBVH; tbvhMs: { B: number; A: number };
-  distSub?: Float32Array;
+  bvhError?: string;
 };
 
 const gpujs = new Map<GpuJsMode, GpuJsRunner>();
 const getGpuJs = (m: GpuJsMode) => { let r = gpujs.get(m); if (!r) { r = new GpuJsRunner(m); gpujs.set(m, r); } return r; };
 
 async function runRow(ctx: Ctx, row: Row, fn: () => Promise<Float32Array>, ref: Float32Array, idx?: Uint32Array) {
-  rows.push(row);
+  pushRow(row);
   renderTable();
   status(`${row.workload} · ${row.engine} · ${row.algo} · ${row.samples.toLocaleString()} samples…`);
   await tick();
@@ -208,7 +224,8 @@ async function runEngine(ctx: Ctx, engine: EngineId, workloads: Workload[]) {
 
   if (engine.startsWith('gpujs-')) {
     const mode = engine.slice(6) as GpuJsMode;
-    if (!(await GpuJsRunner.available(mode))) { rows.push({ ...base('overhang', 'direct', S, 0), error: `${mode} not available in this browser` }); renderTable(); return; }
+    if (!(await GpuJsRunner.available(mode))) { pushRow({ ...base('overhang', 'direct', S, 0), error: `${mode} not available in this browser` }); renderTable(); return; }
+    if (ctx.bvhError) { pushRow({ ...base(workloads.includes('wall') ? 'wall' : 'distance', 'bvh', S, B.triCount), error: ctx.bvhError }); renderTable(); return; }
     const r = getGpuJs(mode);
     const done = (row: Row) => { row.ranOn = r.ranOn(); renderTable(); };
     for (const w of workloads) {
@@ -239,7 +256,7 @@ async function runEngine(ctx: Ctx, engine: EngineId, workloads: Workload[]) {
   if (engine === 'tsl') {
     const gpuOnly = (w: Workload, algo: Algo, n: number, tris: number) => {
       if (tsl.isWebGPU) return false;
-      rows.push({ ...base(w, algo, n, tris), error: 'needs WebGPU (TSL on the WebGL2 fallback can only read its own element, no gathers / raw WGSL)' });
+      pushRow({ ...base(w, algo, n, tris), error: 'needs WebGPU (TSL on the WebGL2 fallback can only read its own element, no gathers / raw WGSL)' });
       renderTable();
       return true;
     };
@@ -277,10 +294,15 @@ async function runAll(opts: { sweepK?: number } = {}): Promise<void> {
   const k = +$<HTMLSelectElement>('k').value;
   const workloads = selectedWorkloads();
   const engines = selectedEngines();
+  const clamp = (v: number, lo: number, hi: number, d: number) => (Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : d);
+  const runs = clamp(+$<HTMLInputElement>('runs').value, 1, 10, 3);
+  const bruteCap = clamp(+$<HTMLInputElement>('bruteCap').value, 64, 200_000, 4096);
+  for (const r of rows) delete r.values; // keep full result arrays for the newest run only
+  shown = null;
   const ctx: Ctx = {
-    B, A, k, runs: +$<HTMLInputElement>('runs').value, bruteCap: +$<HTMLInputElement>('bruteCap').value,
+    B, A, k, runs, bruteCap,
     brute: $<HTMLInputElement>('brute').checked && !opts.sweepK,
-    refs: {}, sub: strideSamples(B, +$<HTMLInputElement>('bruteCap').value), tbvhMs: { B: 0, A: 0 },
+    refs: {}, sub: strideSamples(B, bruteCap), tbvhMs: { B: 0, A: 0 },
   };
 
   // ground truth on the CPU; timed, and shown as the "cpu" engine's rows
@@ -292,25 +314,29 @@ async function runAll(opts: { sweepK?: number } = {}): Promise<void> {
   if (workloads.includes('overhang')) {
     const [v, ms] = time(() => overhangCPU(B));
     ctx.refs.overhang = v;
-    if (engines.includes('cpu')) rows.push(cpuRow('overhang', 'direct', B.triCount, ms, 0, v));
+    if (engines.includes('cpu')) pushRow(cpuRow('overhang', 'direct', B.triCount, ms, 0, v));
   }
   if (workloads.includes('wall')) {
     const [bvh, prep] = time(() => bvhFor(B));
     const [v, ms] = time(() => wallCPU(B, bvh));
     ctx.refs.wall = v;
-    if (engines.includes('cpu')) rows.push(cpuRow('wall', 'bvh', B.triCount, ms, prep, v));
+    if (engines.includes('cpu')) pushRow(cpuRow('wall', 'bvh', B.triCount, ms, prep, v));
   }
   if (workloads.includes('distance') && A) {
     const [bvh, prep] = time(() => bvhFor(A));
     const [v, ms] = time(() => distanceCPU(bvh, B.samples));
     ctx.refs.distance = v;
-    if (engines.includes('cpu')) rows.push(cpuRow('distance', 'bvh', A.triCount, ms, prep, v));
+    if (engines.includes('cpu')) pushRow(cpuRow('distance', 'bvh', A.triCount, ms, prep, v));
   }
   renderTable();
 
   if (engines.some((e) => e.startsWith('gpujs-'))) {
-    if (workloads.includes('wall')) { const [b, ms] = time(() => buildThreadedBVH(B.tris)); ctx.tbvhB = b; ctx.tbvhMs.B = ms; }
-    if (workloads.includes('distance') && A) { const [b, ms] = time(() => buildThreadedBVH(A.tris)); ctx.tbvhA = b; ctx.tbvhMs.A = ms; }
+    // the gpu.js BVH can refuse a mesh (too many triangles for float32 addressing, too deep): that
+    // becomes an error row for the gpu.js engines instead of aborting the whole run
+    try {
+      if (workloads.includes('wall')) { const [b, ms] = time(() => buildThreadedBVH(B.tris)); ctx.tbvhB = b; ctx.tbvhMs.B = ms; }
+      if (workloads.includes('distance') && A) { const [b, ms] = time(() => buildThreadedBVH(A.tris)); ctx.tbvhA = b; ctx.tbvhMs.A = ms; }
+    } catch (e) { ctx.bvhError = String((e as Error).message ?? e); }
   }
 
   for (const e of engines) await runEngine(ctx, e, workloads);
@@ -319,41 +345,38 @@ async function runAll(opts: { sweepK?: number } = {}): Promise<void> {
 }
 
 /**
- * "How far can we push it": BVH paths only, k = 1, 2, 3, 4, 6, 8 (up to 64x the triangles and
- * samples). An engine drops out after its first error or a cold run over 15 s.
+ * "How far can we push it": k = 1, 2, 3, 4, 6 (up to 36x the triangles and samples). BVH paths
+ * only. An engine drops out after its first error or a cold run over 15 s. k=8 is not offered:
+ * it needed over 10 GB of browser memory and exceeds gpu.js's float32 array addressing.
  */
 async function sweep() {
-  // k=8 (64x the triangles, 8M+ samples) pushed a browser past 10 GB, so the default stops at
-  // k=6. ?sweepMax=8 opts back in on a machine with the memory for it.
-  const max = +(params.get('sweepMax') ?? 6);
-  const ks = [1, 2, 3, 4, 6, 8].filter((k) => k <= max);
+  const ks = [1, 2, 3, 4, 6];
   const dropped = new Set<EngineId>();
   const all = selectedEngines();
   const k0 = $<HTMLSelectElement>('k').value;
-  for (const k of ks) {
-    const live = all.filter((e) => !dropped.has(e));
-    if (!live.length) break;
-    // temporarily narrow the engine checkboxes to the survivors
-    for (const e of ENGINES) ($('engines').querySelector(`[data-engine="${e.id}"]`) as HTMLInputElement).checked = live.includes(e.id);
-    const before = rows.length;
-    await runAll({ sweepK: k });
-    for (const r of rows.slice(before)) {
-      // CPU-bound engines (wasm, plain JS) are cut off above 2M samples: they scale linearly and
-      // their working memory is what ran away at k=8
-      if (r.error || (r.coldMs ?? 0) > 15000 || (['gpujs-webasm', 'gpujs-cpu'].includes(r.engine) && r.samples > 2_000_000)) dropped.add(r.engine);
+  const setEngines = (on: EngineId[]) => { for (const e of ENGINES) ($('engines').querySelector(`[data-engine="${e.id}"]`) as HTMLInputElement).checked = on.includes(e.id); };
+  try {
+    for (const k of ks) {
+      const live = all.filter((e) => !dropped.has(e));
+      if (!live.length) break;
+      setEngines(live); // temporarily narrow the engine checkboxes to the survivors
+      const before = rows.length;
+      await runAll({ sweepK: k });
+      for (const r of rows.slice(before)) {
+        // CPU-bound engines (wasm, plain JS) are cut off above 2M samples: they scale linearly and
+        // their working memory is what ran away at k=8
+        if (r.error || (r.coldMs ?? 0) > 15000 || (['gpujs-webasm', 'gpujs-cpu'].includes(r.engine) && r.samples > 2_000_000)) dropped.add(r.engine);
+      }
+      await tick();
     }
-    // free everything tied to this size before building the next one
-    for (const r of rows) if (r.k !== k) delete r.values;
-    tsl.dispose();
-    for (const g of gpujs.values()) g.destroy();
-    gpujs.clear();
-    await tick();
+  } finally {
+    setEngines(all);
+    $<HTMLSelectElement>('k').value = k0;
+    shown = null;
+    current = null; // drop the big meshes, then show the small one again
+    releaseGpu();
+    await ensureLoaded();
   }
-  for (const e of ENGINES) ($('engines').querySelector(`[data-engine="${e.id}"]`) as HTMLInputElement).checked = all.includes(e.id);
-  $<HTMLSelectElement>('k').value = k0;
-  shown = null;
-  current = null; // drop the big meshes, then show the small one again
-  await ensureLoaded();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -365,7 +388,7 @@ const label = (id: EngineId) => ENGINES.find((e) => e.id === id)!.short;
 function renderTable() {
   const body = rows.map((r, i) => {
     const thr = r.warmMs ? (r.samples / r.warmMs / 1000) : 0; // M samples / s
-    const err = r.error ? `<td colspan="6" class="err">${r.error}</td>` : `
+    const err = r.error ? `<td colspan="6" class="err">${esc(r.error)}</td>` : `
       <td>${fmt(r.coldMs, 0)}</td><td><b>${fmt(r.warmMs, 1)}</b></td><td>${fmt(r.gpuMs ?? undefined, 1)}</td>
       <td>${thr ? thr.toFixed(thr < 1 ? 3 : 1) : ''}</td><td>${fmt(r.maxErr, 4)}</td>
       <td>${r.okPct != null ? r.okPct.toFixed(r.okPct > 99.9 && r.okPct < 100 ? 2 : 1) + '%' : ''}${r.signPct != null ? ` <small>sign ${r.signPct.toFixed(1)}%</small>` : ''}</td>`;
@@ -378,6 +401,7 @@ function renderTable() {
 
 function paintRow(r: Row) {
   if (!current || !r.values) return;
+  if (r.meshKey !== current.key) { status(`That result was measured on ${r.part} (k=${r.k}); load the same part and size to paint it.`); return; }
   shown = r;
   view.paint(current.B, r.workload, r.values);
   const lg = legend(r.workload);
@@ -454,14 +478,17 @@ async function main() {
   }
   if (params.get('runs')) $<HTMLInputElement>('runs').value = params.get('runs')!;
   if (params.get('brute') === '0') $<HTMLInputElement>('brute').checked = false;
-  if (library.length) await ensureLoaded();
 
+  let running = false;
   const busy = async (f: () => Promise<void>) => {
+    if (running) return;
+    running = true;
     document.body.classList.add('busy');
     view.pause();
     try { await f(); } catch (e) { status(`Error: ${(e as Error).message}`); console.error(e); }
     view.resume();
     document.body.classList.remove('busy');
+    running = false;
   };
   $<HTMLInputElement>('openPart').onchange = (e) => busy(() => openFiles((e.target as HTMLInputElement).files, false));
   $<HTMLInputElement>('openRev').onchange = (e) => busy(() => openFiles((e.target as HTMLInputElement).files, true));
@@ -478,6 +505,7 @@ async function main() {
     a.href = URL.createObjectURL(new Blob([resultsJSON(env)], { type: 'application/json' }));
     a.download = `bench-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`;
     a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
   };
   $('rows').onclick = (ev) => {
     const tr = (ev.target as HTMLElement).closest('tr');
@@ -493,6 +521,8 @@ async function main() {
     };
   }
 
+  if (library.length) await busy(() => ensureLoaded().then(() => undefined));
+
   // ?auto=1 runs once (or ?auto=sweep) and exposes the JSON for scripted runs
   const auto = params.get('auto');
   if (auto) {
@@ -501,4 +531,4 @@ async function main() {
   }
 }
 
-void main();
+void main().catch((e) => { status(`Startup failed: ${(e as Error).message}`); console.error(e); });

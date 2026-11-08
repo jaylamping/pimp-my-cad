@@ -83,7 +83,8 @@ function parseSettings(xml: string): Map<string, ObjMeta> {
   return out;
 }
 
-export function load3MF(buf: ArrayBuffer, fileName: string): THREE.Group {
+/** `recenter: false` keeps the file's own coordinates (needed to compare two revisions of one part). */
+export function load3MF(buf: ArrayBuffer, fileName: string, opts: { recenter?: boolean } = {}): THREE.Group {
   const zip = unzipSync(new Uint8Array(buf));
   const defs = new Map<string, ObjectDef>();
   const rootPath = Object.keys(zip).find((k) => /^3D\/[^/]+\.model$/i.test(k)) || '3D/3dmodel.model';
@@ -138,6 +139,7 @@ export function load3MF(buf: ArrayBuffer, fileName: string): THREE.Group {
     }
   });
 
+  if (opts.recenter === false) return group;
   // Bed coordinates are Z-up and centred at (128,128); re-centre on the bed origin.
   const box = new THREE.Box3().setFromObject(group);
   const c = box.getCenter(new THREE.Vector3());

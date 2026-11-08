@@ -132,7 +132,9 @@ const wallBruteK = `function wallBrute(samples, normals, tris, triCount, maxDist
     const d = rayTri(ox, oy, oz, dx, dy, dz, tris[b], tris[b + 1], tris[b + 2], tris[b + 3], tris[b + 4], tris[b + 5], tris[b + 6], tris[b + 7], tris[b + 8]);
     if (d > 0.0 && d < best) { best = d; }
   }
-  return best;
+  let r = best + 0.001;
+  if (r > maxDist) { r = maxDist; }
+  return r;
 }`;
 
 const wallBVHK = `function wallBVH(samples, normals, nodes, tris, nodeCount, maxDist) {
@@ -168,7 +170,9 @@ const wallBVHK = `function wallBVH(samples, normals, nodes, tris, nodeCount, max
       node = nodes[o + 6];
     }
   }
-  return best;
+  let r = best + 0.001;
+  if (r > maxDist) { r = maxDist; }
+  return r;
 }`;
 
 const distBruteK = `function distBrute(samples, tris, triCount) {
@@ -325,27 +329,38 @@ export class GpuJsRunner {
     return [...modes].join('+');
   }
 
+  /** gpu.js indexes every array with float32 arithmetic (`i * 3`, `t * 9`), exact only below 2^24. */
+  private static addressable(...lengths: number[]) {
+    const big = Math.max(...lengths);
+    if (big >= 1 << 24) throw new Error(`gpu.js limit: array of ${big.toLocaleString()} floats exceeds float32 addressing (16.7M)`);
+  }
+
   async overhang(samples: Float32Array, normals: Float32Array, minZ: number): Promise<Float32Array> {
+    GpuJsRunner.addressable(samples.length);
     const n = samples.length / 3;
     return f32(await this.k('overhang', overhangK, n, 1)(samples, normals, minZ));
   }
 
   async wallBrute(samples: Float32Array, normals: Float32Array, tris: Float32Array, maxDist: number): Promise<Float32Array> {
+    GpuJsRunner.addressable(samples.length, tris.length);
     const n = samples.length / 3, T = tris.length / 9;
     return f32(await this.k('wallBrute', wallBruteK, n, T)(samples, normals, tris, T, maxDist));
   }
 
   async wallBVH(samples: Float32Array, normals: Float32Array, bvh: ThreadedBVH, maxDist: number): Promise<Float32Array> {
+    GpuJsRunner.addressable(samples.length, bvh.nodes.length, bvh.tris.length);
     const n = samples.length / 3;
     return f32(await this.k('wallBVH', wallBVHK, n, bvh.nodeCount)(samples, normals, bvh.nodes, bvh.tris, bvh.nodeCount, maxDist));
   }
 
   async distBrute(samples: Float32Array, tris: Float32Array): Promise<Float32Array> {
+    GpuJsRunner.addressable(samples.length, tris.length);
     const n = samples.length / 3, T = tris.length / 9;
     return f32(await this.k('distBrute', distBruteK, n, T)(samples, tris, T));
   }
 
   async distBVH(samples: Float32Array, bvh: ThreadedBVH): Promise<Float32Array> {
+    GpuJsRunner.addressable(samples.length, bvh.nodes.length, bvh.tris.length);
     const n = samples.length / 3;
     return f32(await this.k('distBVH', distBVHK, n, bvh.nodeCount)(samples, bvh.nodes, bvh.tris, bvh.nodeCount));
   }

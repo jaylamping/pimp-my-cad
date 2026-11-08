@@ -63,7 +63,11 @@ export class HeatView {
   }
 
   show(p: Prepared) {
-    if (this.mesh) { this.pivot.remove(this.mesh); (this.mesh.material as THREE.Material).dispose(); }
+    if (this.mesh) {
+      this.pivot.remove(this.mesh);
+      (this.mesh.material as THREE.Material).dispose();
+      if (this.mesh.geometry !== p.geometry) this.mesh.geometry.dispose(); // frees the GPU vertex buffers too
+    }
     const mat = new MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.65, metalness: 0.0, side: THREE.DoubleSide });
     this.mesh = new THREE.Mesh(p.geometry, mat);
     this.pivot.add(this.mesh);

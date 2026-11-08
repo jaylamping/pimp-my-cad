@@ -8,7 +8,7 @@ Spike for roadmap item 4 (print-check overlays). `bench.html` runs three checks 
 | Wall thickness | ray from each triangle corner along the inward face normal, first hit within 20 mm |
 | Revision distance | signed closest-point distance from each sample of the new revision to the old revision |
 
-Samples are the corners of the non-indexed triangles (pulled 2 % toward the centroid), so results map 1:1 onto vertex colours. "Push it" subdivides every triangle k² times and sweeps k = 1, 2, 3, 4, 6 (36x the samples and triangles; `?sweepMax=8` adds k=8, which needs well over 10 GB of browser memory). Wasm and plain-JS engines are dropped above 2M samples.
+Samples are the corners of the non-indexed triangles (pulled 2 % toward the centroid), so results map 1:1 onto vertex colours. "Push it" subdivides every triangle k² times and sweeps k = 1, 2, 3, 4, 6 (36x the samples and triangles; k=8 was removed because it needs well over 10 GB of browser memory). Wasm and plain-JS engines are dropped above 2M samples.
 
 ## Run it
 

@@ -16,7 +16,9 @@ import { BED_EPS } from './cpu';
  *  - three-mesh-bvh's WGSL BVH (`BVHComputeData`, unstable API): wall thickness + distance.
  *
  * On a device without WebGPU, three's renderer falls back to WebGL2 and runs TSL compute through
- * transform feedback. The pure-TSL kernels still work there; anything with raw WGSL does not.
+ * transform feedback. Only the overhang kernel (one element in, one out) produces correct results
+ * there: the gather kernels (brute force wall / distance) ran but returned wrong values in testing,
+ * so the bench skips them, and the BVH paths need raw WGSL.
  */
 
 type Buf = { attr: StorageBufferAttribute; node: any };
@@ -128,7 +130,7 @@ export class TslRunner {
                 .and(t.greaterThan(0)).and(t.lessThan(best)), () => { best.assign(t); });
             });
           });
-          out.element(instanceIndex).assign(best);
+          out.element(instanceIndex).assign(best.add(0.001).min(float(maxDist))); // + the ray's inward offset
         })(),
       };
     });
@@ -184,7 +186,7 @@ export class TslRunner {
           var hit: IntersectionResult;
           let ray = Ray( o, d, maxDist );
           let didHit = bvh_RaycastFirstHit( ray, &hit );
-          return select( maxDist, min( hit.dist, maxDist ), didHit );
+          return select( maxDist, min( hit.dist + 0.001, maxDist ), didHit );
         }`, [(data.fns as any).raycastFirstHit]);
       return {
         inputs: [s, nr],

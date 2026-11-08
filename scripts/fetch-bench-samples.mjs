@@ -10,6 +10,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const repo = process.argv[2] ?? 'jaylamping/marengo';
+if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) throw new Error(`expected owner/repo, got ${repo}`);
 const dir = 'hardware/designs/left-arm/prints/upper-arm/cad';
 const out = resolve(import.meta.dirname, '..', 'public', 'samples');
 await mkdir(out, { recursive: true });
@@ -19,7 +20,7 @@ async function get(ref, path, file) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
   const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length < 1000 && buf.toString('utf8', 0, 20).startsWith('version https://git-lfs')) {
+  if (buf.length < 1000 && buf.toString('utf8', 0, 40).startsWith('version https://git-lfs')) {
     throw new Error(`${file} came back as an LFS pointer, not the mesh: ${url}`);
   }
   await writeFile(resolve(out, file), buf);

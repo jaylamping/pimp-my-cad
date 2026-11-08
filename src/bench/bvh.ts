@@ -25,7 +25,9 @@ export type ThreadedBVH = {
 
 export function buildThreadedBVH(tris: Float32Array): ThreadedBVH {
   const T = tris.length / 9;
-  if (T * LEAF_SIZE >= 1 << 24) throw new Error('bench: too many triangles for float-packed leaf ids');
+  // gpu.js kernels index these arrays with float32 arithmetic (`t * 9`), which is exact only below 2^24
+  if (T * 9 >= 1 << 24) throw new Error(`gpu.js limit: ${T.toLocaleString()} triangles exceed float32 array addressing (about 1.86M)`);
+  if (T === 0) throw new Error('bench: empty mesh');
   const cen = new Float32Array(T * 3);
   const bmin = new Float32Array(T * 3), bmax = new Float32Array(T * 3);
   for (let t = 0; t < T; t++) {
@@ -75,6 +77,8 @@ export function buildThreadedBVH(tris: Float32Array): ThreadedBVH {
     return node;
   };
   const root = build(0, T, 0);
+  // the distance kernel's greedy descent is capped at 64 levels
+  if (depth > 60) throw new Error(`BVH depth ${depth} is too deep for the gpu.js kernels (clustered centroids?)`);
 
   // flatten depth-first; a node's skip link is the first node after its subtree
   const flat: N[] = [];

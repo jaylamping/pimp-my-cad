@@ -8,6 +8,8 @@ import type { Prepared } from './mesh';
  */
 
 export const WALL_MAX = 20; // mm; rays that travel further than this report WALL_MAX
+/** Rays start this far inside the surface so they don't re-hit their own face; added back to the result. */
+export const RAY_BIAS = 1e-3;
 export const BED_EPS = 0.2; // mm; faces this close to the lowest Z sit on the bed, not overhangs
 
 export function bvhFor(p: Prepared): MeshBVH {
@@ -37,7 +39,7 @@ export function wallCPU(p: Prepared, bvh: MeshBVH, samples = p.samples, normals 
     ray.origin.set(samples[i * 3] - nx * 1e-3, samples[i * 3 + 1] - ny * 1e-3, samples[i * 3 + 2] - nz * 1e-3);
     ray.direction.set(-nx, -ny, -nz);
     const hit = bvh.raycastFirst(ray, THREE.DoubleSide, 0, WALL_MAX);
-    out[i] = hit ? Math.min(hit.distance, WALL_MAX) : WALL_MAX;
+    out[i] = hit ? Math.min(hit.distance + RAY_BIAS, WALL_MAX) : WALL_MAX; // + the inward offset the ray started with
   }
   return out;
 }

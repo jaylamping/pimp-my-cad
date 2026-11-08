@@ -16,7 +16,7 @@ fieldset i { color: var(--dim); font-style: normal; font-size: 11px; }
 button { background: #2a2e33; color: var(--fg); border: 1px solid var(--line); border-radius: 5px; padding: 6px 10px; cursor: pointer; font: inherit; }
 button.primary { background: var(--acc); color: #0c1214; border-color: var(--acc); font-weight: 600; }
 .buttons { display: flex; gap: 8px; margin: 10px 0; }
-body.busy button { opacity: .5; pointer-events: none; }
+body.busy button, body.busy #controls { opacity: .5; pointer-events: none; }
 #stage { position: relative; min-height: 0; }
 #view { position: absolute; inset: 0; }
 #view canvas { display: block; width: 100%; height: 100%; touch-action: none; }

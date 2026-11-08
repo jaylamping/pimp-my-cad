@@ -27,8 +27,9 @@ export type Prepared = {
 
 /** `fileName` matters for blob: URLs (opened files), which carry no extension to sniff the type from. */
 export async function loadMesh(url: string, fileName = url): Promise<THREE.BufferGeometry> {
-  const buf = await (await fetch(url)).arrayBuffer();
-  return parseMesh(buf, fileName);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Could not load ${fileName} (HTTP ${res.status}). Run \`npm run bench:samples\` or use Open part…`);
+  return parseMesh(await res.arrayBuffer(), fileName);
 }
 
 export function parseMesh(buf: ArrayBuffer, name: string): THREE.BufferGeometry {
@@ -36,13 +37,20 @@ export function parseMesh(buf: ArrayBuffer, name: string): THREE.BufferGeometry 
   if (ext === 'stl') return new STLLoader().parse(buf);
   if (ext === '3mf') {
     // Bake every part of the 3MF into one triangle soup in build-plate coordinates.
-    const root = load3MF(buf, name);
+    // keep the file's own coordinates: re-centring each file separately would shift a revision
+    // relative to the older one whenever the bounding box changed
+    const root = load3MF(buf, name, { recenter: false });
     root.updateMatrixWorld(true);
     const parts: THREE.BufferGeometry[] = [];
     root.traverse((o) => {
       const m = o as THREE.Mesh;
       if (!m.isMesh || m.userData.kind === 'modifier') return;
       const g = (m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone()).applyMatrix4(m.matrixWorld);
+      if (m.matrixWorld.determinant() < 0) {
+        // a mirrored instance reverses triangle winding, which would flip every face normal
+        const a = g.getAttribute('position').array as Float32Array;
+        for (let i = 0; i < a.length; i += 9) for (let j = 0; j < 3; j++) { const t = a[i + 3 + j]; a[i + 3 + j] = a[i + 6 + j]; a[i + 6 + j] = t; }
+      }
       parts.push(new THREE.BufferGeometry().setAttribute('position', g.getAttribute('position')));
     });
     return merge(parts);
@@ -104,6 +112,7 @@ export function prepare(g: THREE.BufferGeometry, name: string): Prepared {
     if (n.crossVectors(e1, e2).lengthSq() > 1e-14) keep.push(t);
   }
   const T = keep.length;
+  if (T === 0) throw new Error(`${name}: no usable triangles (empty or all zero-area)`);
   const tris = new Float32Array(T * 9);
   const samples = new Float32Array(T * 9);
   const normals = new Float32Array(T * 9);
