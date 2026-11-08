@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "bench": "vite --host",
     "bench:https": "vite --host --mode https",
-    "bench:samples": "bash scripts/fetch-bench-samples.sh"
+    "bench:samples": "node scripts/fetch-bench-samples.mjs"
   },
   "dependencies": {
     "gpu.js": "^2.24.1",

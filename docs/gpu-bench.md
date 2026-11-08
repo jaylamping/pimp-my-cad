@@ -14,10 +14,12 @@ Samples are the corners of the non-indexed triangles (pulled 2 % toward the cent
 
 ```bash
 npm install
-npm run bench:samples   # fetches marengo's upper-arm STLs + two older upper_arm revisions (no git-lfs needed)
+npm run bench:samples   # fetches marengo's upper-arm STLs + two older upper_arm revisions (plain Node, no git-lfs)
 npm run bench           # http://localhost:5173/bench.html
 npm run bench:https     # self-signed HTTPS, needed for WebGPU on a phone over a LAN IP
 ```
+
+No samples? Use **Open part…** (STL or 3MF) and **Open older revision…** on the page; files stay in the browser.
 
 Engines: CPU three-mesh-bvh (reference), gpu.js on WebGL2 / WebGPU / wasm SIMD+threads / plain cpu, and three's WebGPU renderer running TSL compute plus three-mesh-bvh's WGSL BVH (`BVHComputeData`). `?display=webgl` renders through WebGL while compute stays on WebGPU. The page is cross-origin isolated (see `vite.config.ts`) so gpu.js's wasm threads work. "Copy JSON" / "Download" export every row with the environment, so device runs can be pasted back.
 

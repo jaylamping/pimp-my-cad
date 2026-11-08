@@ -50,3 +50,6 @@ small { color: var(--dim); }
   #status { margin-left: 0; width: 100%; }
 }
 .warn { color: #e8b04d; }
+
+.files { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 8px; }
+.btn { background: #2a2e33; border: 1px solid var(--line); border-radius: 5px; padding: 5px 9px; cursor: pointer; display: inline-block !important; margin: 0 !important; }
