@@ -57,7 +57,12 @@ async function loadGlb(buf: ArrayBuffer, fileName: string): Promise<Loaded> {
 
 // STEP needs OpenCascade, which runs in the local server (vite plugin in
 // server/step2glb.ts) rather than in the browser, so phones get a light GLB.
+// In the desktop app the converter is a bundled sidecar, called with the file's path.
+export let nativeStepConverter: ((path: string) => Promise<ArrayBuffer>) | null = null;
+export const setNativeStepConverter = (f: (path: string) => Promise<ArrayBuffer>) => { nativeStepConverter = f; };
+
 async function convertStep(buf: ArrayBuffer, fileName: string): Promise<ArrayBuffer> {
+  if (nativeStepConverter) return nativeStepConverter(fileName);
   let res: Response;
   try {
     res = await fetch(`api/step2glb?name=${encodeURIComponent(fileName.split(/[\\/]/).pop()!)}`, { method: 'POST', body: buf });

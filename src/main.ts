@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import { Viewer, Hit, Mode } from './viewer';
-import { loadModel, sha256 } from './loaders';
+import { loadModel, sha256, setNativeStepConverter } from './loaders';
+import * as desktop from './desktop';
 import { LocalStore, CommentStore, ReviewDoc, ReviewComment, Severity, newId } from './comments';
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector(s) as T;
 const viewer = new Viewer($('#view'));
-const store: CommentStore = new LocalStore();
+const store: CommentStore = desktop.isDesktop ? new desktop.SidecarStore() : new LocalStore();
 
 type LibItem = { title: string; path: string; url: string };
 let library: LibItem[] = [];
@@ -20,7 +21,7 @@ const status = (s: string) => ($('#status').textContent = s);
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
 // ---------- loading ----------
-async function open(buf: ArrayBuffer, path: string, title = path.split('/').pop()!) {
+async function open(buf: ArrayBuffer, path: string, title = path.split(/[\\/]/).pop()!) {
   status(`Loading ${title}…`);
   const t0 = performance.now();
   let loaded;
@@ -29,6 +30,7 @@ async function open(buf: ArrayBuffer, path: string, title = path.split('/').pop(
   const { root, upAxis, rev, note } = loaded;
   const sha = rev ?? await sha256(buf).catch(() => 'unhashed');
   viewer.setModel(root, upAxis);
+  if (desktop.isDesktop) desktop.setCurrentPath(path);
   const doc = await store.load(path);
   current = { path, title, sha, doc };
   draft = null; activeId = null;
@@ -72,6 +74,28 @@ async function initLibrary() {
   const it = library.find((i) => i.path === want) || library[0];
   if (it) { sel.value = it.path; await openUrl(it); }
   else status('Drop a 3MF, STEP, STL or GLB anywhere, or press File');
+}
+
+// ---------- desktop: native open, drop, live reload ----------
+async function openNative(path: string) {
+  await open(await desktop.readFile(path), path);
+  await desktop.watch(path);
+}
+if (desktop.isDesktop) {
+  setNativeStepConverter(desktop.convertStep);
+  $('#file').addEventListener('click', async (e) => {
+    e.preventDefault(); // use the native dialog so we get a real path
+    const p = await desktop.pickFile();
+    if (p) await openNative(p);
+  }, true);
+  desktop.onDropPaths((p) => openNative(p));
+  // A CAD program re-exported the file: reload in place. Comments for the old
+  // revision are flagged by the existing hash check.
+  desktop.onFileChanged(async (p) => {
+    if (current?.path !== p) return;
+    await open(await desktop.readFile(p), p);
+    status(`${fileStatus} · reloaded ${new Date().toLocaleTimeString()}`);
+  });
 }
 
 $<HTMLInputElement>('#file').onchange = async (e) => {
