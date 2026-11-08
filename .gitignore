@@ -3,3 +3,4 @@ node_modules
 public/library.local.json
 public/samples
 vite.log
+__pycache__/

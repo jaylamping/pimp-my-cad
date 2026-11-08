@@ -131,7 +131,10 @@ export class Viewer {
     const c = box.getCenter(new THREE.Vector3());
     const r = box.getSize(new THREE.Vector3()).length() / 2 || 50;
     this.size = r * 2;
-    const dist = r / Math.sin(THREE.MathUtils.degToRad(this.camera.fov / 2)) * 1.05;
+    // fit the narrower of the two fields of view, so portrait phones don't crop the sides
+    const vHalf = THREE.MathUtils.degToRad(this.camera.fov / 2);
+    const half = Math.min(vHalf, Math.atan(Math.tan(vHalf) * this.camera.aspect));
+    const dist = r / Math.sin(half) * 1.05;
     this.camera.position.copy(c).add(dir.clone().normalize().multiplyScalar(dist));
     this.camera.near = dist / 100; this.camera.far = dist * 20;
     this.camera.updateProjectionMatrix();
@@ -153,21 +156,24 @@ export class Viewer {
   }
 
   // ---------- explode ----------
-  // Explode the deepest level that has more than one member: parts inside an
-  // object, or objects in a plate/assembly. Each moves away from the model centre.
+  // Explode every level that has more than one member: parts inside an object,
+  // objects in a plate, sub-assemblies in an assembly. Each member moves away
+  // from the centre of its own level, so a sub-assembly first moves out as a
+  // unit and its parts then spread around it.
   private computeExplode() {
     this.explodeBase.clear();
     if (!this.model) return;
-    const center = this.bbox().getCenter(new THREE.Vector3());
-    const movers: THREE.Object3D[] = [];
+    const movers: { m: THREE.Object3D; center: THREE.Vector3 }[] = [];
     const visit = (o: THREE.Object3D) => {
       const kids = o.children.filter((k) => k.type !== 'Object2D' && !(k as any).isCSS2DObject);
-      if (kids.length > 1) movers.push(...kids);
+      if (kids.length > 1) {
+        const center = new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3());
+        for (const m of kids) movers.push({ m, center });
+      }
       for (const k of kids) visit(k);
     };
     visit(this.model);
-    // only leaves' nearest multi-member ancestors: keep the deepest movers
-    for (const m of movers) {
+    for (const { m, center } of movers) {
       const c = new THREE.Box3().setFromObject(m).getCenter(new THREE.Vector3());
       const dirWorld = c.sub(center);
       if (dirWorld.lengthSq() < 1e-6) dirWorld.set(0, 1, 0).multiplyScalar(0.001);
@@ -249,8 +255,7 @@ export class Viewer {
       const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]), new THREE.LineBasicMaterial({ color: 0xffe14d, depthTest: false }));
       line.renderOrder = 10;
       this.measureObj.add(line);
-      const s = this.pivot.getWorldScale(new THREE.Vector3()).x * (this.model?.scale.x ?? 1);
-      const mm = a.distanceTo(b) / s;
+      const mm = a.distanceTo(b); // setModel scales every model so world units are mm
       const div = document.createElement('div');
       div.className = 'measure-label';
       div.textContent = `${mm.toFixed(2)} mm`;

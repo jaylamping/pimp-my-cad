@@ -37,6 +37,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 #tree li { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 4px; cursor: pointer; }
 #tree li:hover { background: #2a2e33; }
 #tree li.sel { background: #4a3a20; }
+#tree li.grp { color: var(--dim); font-size: 11px; padding-top: 8px; cursor: default; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+#tree li.grp:hover { background: none; }
 #tree .sw { width: 10px; height: 10px; border-radius: 2px; flex: none; }
 #tree .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #tree .mod { color: var(--dim); font-size: 11px; }
