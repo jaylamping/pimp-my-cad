@@ -323,9 +323,13 @@ async function runAll(opts: { sweepK?: number } = {}): Promise<void> {
  * samples). An engine drops out after its first error or a cold run over 15 s.
  */
 async function sweep() {
-  const ks = [1, 2, 3, 4, 6, 8];
+  // k=8 (64x the triangles, 8M+ samples) pushed a browser past 10 GB, so the default stops at
+  // k=6. ?sweepMax=8 opts back in on a machine with the memory for it.
+  const max = +(params.get('sweepMax') ?? 6);
+  const ks = [1, 2, 3, 4, 6, 8].filter((k) => k <= max);
   const dropped = new Set<EngineId>();
   const all = selectedEngines();
+  const k0 = $<HTMLSelectElement>('k').value;
   for (const k of ks) {
     const live = all.filter((e) => !dropped.has(e));
     if (!live.length) break;
@@ -333,9 +337,23 @@ async function sweep() {
     for (const e of ENGINES) ($('engines').querySelector(`[data-engine="${e.id}"]`) as HTMLInputElement).checked = live.includes(e.id);
     const before = rows.length;
     await runAll({ sweepK: k });
-    for (const r of rows.slice(before)) if (r.error || (r.coldMs ?? 0) > 15000) dropped.add(r.engine);
+    for (const r of rows.slice(before)) {
+      // CPU-bound engines (wasm, plain JS) are cut off above 2M samples: they scale linearly and
+      // their working memory is what ran away at k=8
+      if (r.error || (r.coldMs ?? 0) > 15000 || (['gpujs-webasm', 'gpujs-cpu'].includes(r.engine) && r.samples > 2_000_000)) dropped.add(r.engine);
+    }
+    // free everything tied to this size before building the next one
+    for (const r of rows) if (r.k !== k) delete r.values;
+    tsl.dispose();
+    for (const g of gpujs.values()) g.destroy();
+    gpujs.clear();
+    await tick();
   }
   for (const e of ENGINES) ($('engines').querySelector(`[data-engine="${e.id}"]`) as HTMLInputElement).checked = all.includes(e.id);
+  $<HTMLSelectElement>('k').value = k0;
+  shown = null;
+  current = null; // drop the big meshes, then show the small one again
+  await ensureLoaded();
 }
 
 // ---------------------------------------------------------------------------------------------
