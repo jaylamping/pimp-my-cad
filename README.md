@@ -1,4 +1,4 @@
-# pimp-my-cad
+# TandemCAD
 
 A browser app for reviewing 3D parts and assemblies: open a file, spin it around, explode it, cut a section, measure, and pin comments with suggested fixes on the exact spot of the exact part. Comments are plain JSON, keyed by part and file revision, so other people (or agents) can read them and act on them.
 
