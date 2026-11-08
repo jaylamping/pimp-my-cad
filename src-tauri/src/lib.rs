@@ -1,7 +1,7 @@
-// Native side of pimp-my-cad: local files, the STEP converter sidecar, the
+// Native side of TandemCAD: local files, the STEP converter sidecar, the
 // metadata file next to each opened file, and a file watcher for live reload.
 //
-// Comments live in `<file>.pimp.json` beside the opened file (same schema as
+// Comments live in `<file>.review.json` beside the opened file (same schema as
 // `ReviewDoc` in src/comments.ts), so agents and git can read them directly.
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -18,7 +18,7 @@ use tauri::{ipc::Response, AppHandle, Emitter, Manager, State};
 type Res<T> = Result<T, String>;
 fn err<E: std::fmt::Display>(e: E) -> String { e.to_string() }
 
-fn sidecar_path(file: &str) -> PathBuf { PathBuf::from(format!("{file}.pimp.json")) }
+fn sidecar_path(file: &str) -> PathBuf { PathBuf::from(format!("{file}.review.json")) }
 
 /// Raw bytes of any file (a Response avoids JSON-encoding large buffers).
 #[tauri::command]
@@ -29,7 +29,9 @@ fn read_file(path: String) -> Res<Response> {
 #[tauri::command]
 fn load_sidecar(file: String) -> Res<Option<String>> {
     let p = sidecar_path(&file);
-    if !p.exists() { return Ok(None); }
+    // read comments saved before the rename (`<file>.pimp.json`); the next save writes the new name
+    let legacy = PathBuf::from(format!("{file}.pimp.json"));
+    let p = if p.exists() { p } else if legacy.exists() { legacy } else { return Ok(None) };
     fs::read_to_string(p).map(Some).map_err(err)
 }
 
@@ -43,7 +45,7 @@ fn save_sidecar(file: String, json: String) -> Res<()> {
 }
 
 /// Converter: the bundled `step2glb` sidecar next to the app binary if present,
-/// else `python tools/step2glb/step2glb.py` (dev; set PIMP_PYTHON / PIMP_STEP2GLB).
+/// else `python tools/step2glb/step2glb.py` (dev; set TANDEM_PYTHON / TANDEM_STEP2GLB).
 fn converter() -> (Command, String) {
     if let Ok(exe) = std::env::current_exe() {
         let name = if cfg!(windows) { "step2glb.exe" } else { "step2glb" };
@@ -52,9 +54,9 @@ fn converter() -> (Command, String) {
             if p.exists() { return (Command::new(&p), p.to_string_lossy().into()); }
         }
     }
-    let script = std::env::var("PIMP_STEP2GLB")
+    let script = std::env::var("TANDEM_STEP2GLB").or_else(|_| std::env::var("PIMP_STEP2GLB"))
         .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../tools/step2glb/step2glb.py").into());
-    let py = std::env::var("PIMP_PYTHON").unwrap_or_else(|_| if cfg!(windows) { "python".into() } else { "python3".into() });
+    let py = std::env::var("TANDEM_PYTHON").or_else(|_| std::env::var("PIMP_PYTHON")).unwrap_or_else(|_| if cfg!(windows) { "python".into() } else { "python3".into() });
     let mut c = Command::new(&py);
     c.arg(&script);
     (c, script)
@@ -77,7 +79,7 @@ async fn convert_step(app: AppHandle, path: String) -> Res<Response> {
             let src = dir.join(Path::new(&path).file_name().unwrap());
             fs::write(&src, &bytes).map_err(err)?;
             let o = cmd.arg(&src).arg("-o").arg(&out).arg("--tree").arg("--quiet").output()
-                .map_err(|e| format!("could not start the STEP converter: {e}. Install Python 3 and `pip install -r tools/step2glb/requirements.txt`, or set PIMP_PYTHON."))?;
+                .map_err(|e| format!("could not start the STEP converter: {e}. Install Python 3 and `pip install -r tools/step2glb/requirements.txt`, or set TANDEM_PYTHON."))?;
             if !o.status.success() { return Err(String::from_utf8_lossy(&o.stderr).trim().to_string()); }
         }
         Ok(Response::new(fs::read(out).map_err(err)?))
@@ -121,5 +123,5 @@ pub fn run() {
         .manage(Watch(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![read_file, load_sidecar, save_sidecar, convert_step, watch_file])
         .run(tauri::generate_context!())
-        .expect("error while running pimp-my-cad");
+        .expect("error while running TandemCAD");
 }

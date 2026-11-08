@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""STEP -> GLB for pimp-my-cad, keeping the assembly tree.
+"""STEP -> GLB for TandemCAD, keeping the assembly tree.
 
 Reads a STEP file with OpenCascade's XCAF reader (names, colours, assembly
 structure, instance placements), tessellates each distinct part once, and
@@ -59,7 +59,7 @@ from OCP.TopoDS import TopoDS
 from OCP.XCAFDoc import XCAFDoc_ColorCurv, XCAFDoc_ColorGen, XCAFDoc_ColorSurf, XCAFDoc_DocumentTool
 
 VERSION = "1"
-GENERATOR = f"pimp-my-cad step2glb {VERSION}"
+GENERATOR = f"TandemCAD step2glb {VERSION}"
 # names some exporters give the top node; the file name says more
 GENERIC_NAMES = {"", "UNNAMED", "COMPOUND", "SOLID", "SHELL", "ASSEMBLY", "NONE"}
 

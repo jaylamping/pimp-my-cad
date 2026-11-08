@@ -1,6 +1,6 @@
 # Desktop app (Tauri 2)
 
-pimp-my-cad is a local desktop app. Decisions (Joey, 2026-11-08): Tauri shell, files stay where they are, no database server, no hosted storage, mobile shelved.
+TandemCAD is a local desktop app. Decisions (Joey, 2026-11-08): Tauri shell, files stay where they are, no database server, no hosted storage, mobile shelved.
 
 ## Pieces
 
@@ -8,8 +8,8 @@ pimp-my-cad is a local desktop app. Decisions (Joey, 2026-11-08): Tauri shell, f
 | --- | --- | --- |
 | Viewer | `src/` | Same Three.js viewer; `src/desktop.ts` is the only Tauri-aware file. |
 | Native side | `src-tauri/src/lib.rs` | read file, sidecar load/save, STEP converter, file watcher. |
-| STEP converter | `tools/step2glb/` | Run as a subprocess. Release builds bundle it as the `step2glb` sidecar (`src-tauri/binaries/step2glb-<target-triple>[.exe]`, built with PyInstaller). Dev falls back to `python tools/step2glb/step2glb.py` (`PIMP_PYTHON`, `PIMP_STEP2GLB` override). Results are cached in the app cache dir by STEP hash + converter version. |
-| Comments | `<opened file>.pimp.json` | Same schema as `ReviewDoc` (`src/comments.ts`). Written atomically next to the file, so agents and git read it directly. No database. |
+| STEP converter | `tools/step2glb/` | Run as a subprocess. Release builds bundle it as the `step2glb` sidecar (`src-tauri/binaries/step2glb-<target-triple>[.exe]`, built with PyInstaller). Dev falls back to `python tools/step2glb/step2glb.py` (`TANDEM_PYTHON`, `TANDEM_STEP2GLB` override). Results are cached in the app cache dir by STEP hash + converter version. |
+| Comments | `<opened file>.review.json` | Same schema as `ReviewDoc` (`src/comments.ts`). Written atomically next to the file, so agents and git read it directly. No database. |
 | Live reload | `watch_file` command | Watches the opened file's folder (CAD programs save by replacing the file), debounces 600 ms, emits `file-changed`; the viewer re-opens the file. Pins on the old revision show as "older rev" via the existing hash check. |
 
 ## Run

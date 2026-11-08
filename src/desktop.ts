@@ -1,5 +1,5 @@
 // Desktop (Tauri) bridge. Everything here is a no-op in a plain browser.
-// Comments live in `<file>.pimp.json` next to the opened file, so agents and
+// Comments live in `<file>.review.json` next to the opened file, so agents and
 // git can read them without going through the app.
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
