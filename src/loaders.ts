@@ -8,7 +8,7 @@ import { load3MF } from './load3mf';
 // so re-converting the same STEP (new converter, finer mesh) keeps comments current.
 export type Loaded = { root: THREE.Group; upAxis: 'y' | 'z'; rev?: string; note?: string };
 
-const STEP_GENERATORS = ['tandemcad step2glb', 'pimp-my-cad step2glb']; // older files used the first name
+const STEP_GENERATORS = ['tandemcad step2glb'];
 
 const baseName = (n: string) => n.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, '');
 

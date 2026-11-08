@@ -19,8 +19,6 @@ type Res<T> = Result<T, String>;
 fn err<E: std::fmt::Display>(e: E) -> String { e.to_string() }
 
 fn sidecar_path(file: &str) -> PathBuf { PathBuf::from(format!("{file}.tandem.json")) }
-/// Files saved by the app before the rename (when it was called pimp-my-cad).
-fn legacy_sidecar_path(file: &str) -> PathBuf { PathBuf::from(format!("{file}.pimp.json")) }
 
 /// Raw bytes of any file (a Response avoids JSON-encoding large buffers).
 #[tauri::command]
@@ -30,9 +28,7 @@ fn read_file(path: String) -> Res<Response> {
 
 #[tauri::command]
 fn load_sidecar(file: String) -> Res<Option<String>> {
-    let mut p = sidecar_path(&file);
-    // read an old .pimp.json once; the next save writes .tandem.json
-    if !p.exists() { p = legacy_sidecar_path(&file); }
+    let p = sidecar_path(&file);
     if !p.exists() { return Ok(None); }
     fs::read_to_string(p).map(Some).map_err(err)
 }
@@ -56,9 +52,9 @@ fn converter() -> (Command, String) {
             if p.exists() { return (Command::new(&p), p.to_string_lossy().into()); }
         }
     }
-    let script = std::env::var("TANDEMCAD_STEP2GLB").or_else(|_| std::env::var("PIMP_STEP2GLB"))
+    let script = std::env::var("TANDEMCAD_STEP2GLB")
         .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../tools/step2glb/step2glb.py").into());
-    let py = std::env::var("TANDEMCAD_PYTHON").or_else(|_| std::env::var("PIMP_PYTHON")).unwrap_or_else(|_| if cfg!(windows) { "python".into() } else { "python3".into() });
+    let py = std::env::var("TANDEMCAD_PYTHON").unwrap_or_else(|_| if cfg!(windows) { "python".into() } else { "python3".into() });
     let mut c = Command::new(&py);
     c.arg(&script);
     (c, script)
