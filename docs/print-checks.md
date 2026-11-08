@@ -15,6 +15,10 @@ three-mesh-bvh's WebGPU API is marked unstable; pin versions when upgrading thre
 
 **Outlier filter.** Wall thickness: about 0.0004 % of samples (edge-grazing rays) come back 10-20 mm too *large* on every engine. A corner reading more than 5 mm above the median of its triangle's three corners is clamped to that median (`filterWallOutliers` in `src/checks/cpu.ts`). Low readings are never touched, so a genuinely thin spot is never hidden (a flat face can vary in thickness). The count is shown next to the timing.
 
-**Known limits** (from the Codex review): on the CPU path the distance sign at sharp edges is decided by ray parity; the WebGPU path still uses closest-face normals there (no pseudonormals yet). Soup extraction and BVH build run on the main thread (no worker yet); instanced meshes are rejected; models too big for one WebGPU storage binding fall back to the CPU. 3MF revisions are compared in their original bed coordinates (the loader's per-file recentring is undone).
+**Distance sign.** The closest point's sign comes from angle-weighted pseudonormals of the baseline (`src/checks/pseudo.ts`): the face normal inside a face, the edge normal on an edge, the vertex pseudonormal on a vertex. That is robust at sharp edges and tips. On the GPU the shader returns the closest feature (unsigned distance, vertex id, barycentrics) and the sign pass runs on the CPU. Open or non-manifold baselines fall back to the adjacent face normals there, so their sign is only as good as the mesh.
+
+**Threading.** The CPU fallback runs in a Web Worker (`cpu.worker.ts`) and is cancelled by terminating it. Extracting the triangle soup and building the GPU BVH still run on the main thread (three-mesh-bvh's WebGPU BVH is built on the renderer side), so a very large assembly can stall the UI briefly before the GPU dispatch.
+
+**Known limits.** Instanced meshes (glTF `EXT_mesh_gpu_instancing`) are rejected with a message: per-instance results would need per-instance vertex colours. Models too big for one WebGPU storage binding fall back to the CPU. 3MF revisions are compared in their original bed coordinates (the loader's per-file recentring is undone).
 
 **Agents / debugging.** `window.pmcChecks` is the `PrintChecks` instance (`run('wall')`, `captureBaseline()`, `clear()`).
