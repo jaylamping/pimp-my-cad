@@ -17,6 +17,8 @@ Everything listed under "What it does today" in [README.md](README.md) works and
 
 Not yet tested by Joey on a real device.
 
+Hosting decision (2026-11-08): local only for now. Joey runs the app on his PC (`npm run dev:lan`) and opens it on PC and phone; public hosting is far off. Comment storage should follow: the local server writes review JSON into the parts repo checkout.
+
 ## Open question for Joey: hosting and where comments live
 
 Posted as a choice in the marengo thread, not answered yet:
@@ -30,7 +32,7 @@ The part files themselves (3MF/STL/STEP in Git LFS in the parts repo) also need 
 ## Next steps
 
 1. Settle hosting. Then add a `GitHubStore` behind `CommentStore` and decide where review JSON goes in a parts repo (suggested: `reviews/<path of reviewed file>.json`).
-2. STEP to GLB converter that keeps the assembly tree and part names. `cadquery-ocp` installs from pip (checked); plan: XCAF STEP reader into `RWGltf_CafWriter`, mm in, metres Y-up out (the viewer already scales GLB back to mm). marengo's STEP exports come from SolidWorks 2026 on Joey's Windows PC.
+2. ~~STEP to GLB converter~~ Done: `tools/step2glb` (OCP XCAF reader, own GLB writer instead of `RWGltf_CafWriter` so names, instancing and extras are under our control) plus a vite plugin that converts on open. Still to check: a real multi-level SolidWorks 2026 assembly from Joey's PC (marengo's repo only has single-part SolidWorks STEPs and one OCC assembly).
 3. Review sets: a manifest of files reviewed together, with pass/fail per file.
 4. Print-check overlays (thin walls, overhangs, stray bodies) and side-by-side revision diff.
 5. Phone polish: the top bar wraps to three rows on an iPhone and eats screen height.

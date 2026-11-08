@@ -6,7 +6,8 @@ A browser app for reviewing 3D parts and assemblies: open a file, spin it around
 
 ## What it does today (v0)
 
-- **Opens** Bambu Studio / generic **3MF** (multi-file production extension, part names, modifier volumes and their per-part slicer overrides), **STL**, and **GLB/glTF**. Drag a file onto the page, use **File**, or list files in `public/library.json`.
+- **Opens** Bambu Studio / generic **3MF** (multi-file production extension, part names, modifier volumes and their per-part slicer overrides), **STEP** assemblies (full part tree, see below), **STL**, and **GLB/glTF**. Drag a file onto the page, use **File**, or list files in `public/library.json`.
+- **STEP assemblies:** the local server converts a `.step` / `.stp` to GLB with OpenCascade ([tools/step2glb](tools/step2glb/README.md)), keeping every sub-assembly and part instance by its CAD name (`arm/upper_arm-1/bracket-2`). Explode moves sub-assemblies out as units, then spreads their parts; comments stick to the instance. Conversions are cached by file hash, and comments are keyed to the STEP's hash, so re-converting never orphans them.
 - **View:** orbit / pan / zoom (mouse or touch), named views, fit, explode slider, section plane on X/Y/Z with flip, part tree with show/hide (double-click to isolate), modifiers toggle.
 - **Measure:** tap two points, distance in mm.
 - **Comment:** pick **Comment**, tap a spot on a part, write what's wrong, choose a severity (blocker/major/minor/note) and an optional suggested fix. Pins stay attached to that part, so they move with the explode. Mark comments fixed or won't-fix with a note, reopen, or copy a deep link (`#file=<path>&c=<id>`).
@@ -48,15 +49,19 @@ One document per reviewed file. `part` is the node path inside the file; `anchor
 
 ```bash
 npm install
+pip install -r tools/step2glb/requirements.txt   # for STEP files (Python 3.10+)
 npm run dev      # http://localhost:5173
-npm run build    # static site in dist/
+npm run dev:lan  # same, reachable from a phone on the same Wi-Fi (http://<pc-ip>:5173)
+npm run build    # static site in dist/ (STEP needs the server: npm run preview, or pre-convert)
+npm run test:step
 ```
+
+If the Python with `cadquery-ocp` isn't `python3` (`python` on Windows), set `PIMP_PYTHON` to it.
 
 Point the library at your own files with `public/library.local.json` (gitignored, same shape as `public/library.example.json`) and put the files under `public/samples/` (also gitignored).
 
 ## Roadmap
 
-1. Save comments to a git repo (commit JSON next to the parts) and host the app so it opens on phone and PC.
-2. STEP → GLB converter that keeps the assembly tree and part names, so whole assemblies explode part by part.
-3. Review sets: a manifest of files to review together, with a pass/fail per file.
-4. Print-check overlays (thin walls, overhangs, stray bodies) and side-by-side revision diff.
+1. Save comments into the parts repo checkout through the local server (JSON per reviewed file, readable by any agent with `git pull`). Runs on your own PC for now; public hosting later.
+2. Review sets: a manifest of files to review together, with a pass/fail per file.
+3. Print-check overlays (thin walls, overhangs, stray bodies) and side-by-side revision diff.
