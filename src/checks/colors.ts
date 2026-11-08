@@ -21,6 +21,12 @@ const lerp3 = (stops: [number, THREE.Color][], t: number, out: THREE.Color) => {
   return out.copy(stops[stops.length - 1][1]);
 };
 
+/** Ordered within 0-90 for any allowed threshold (20-80). */
+const overhangStops = (): [number, THREE.Color][] => {
+  const o = thresholds.overhang;
+  return [[o - 10, NEUTRAL], [o, YELLOW], [o + (90 - o) / 2, ORANGE], [90, RED]];
+};
+
 export function colour(w: Check, v: number, out: THREE.Color): THREE.Color {
   const th = thresholds;
   if (w === 'wall') {
@@ -29,7 +35,7 @@ export function colour(w: Check, v: number, out: THREE.Color): THREE.Color {
   }
   if (w === 'overhang') {
     if (v <= th.overhang - 10) return out.copy(NEUTRAL);
-    return lerp3([[th.overhang - 10, NEUTRAL], [th.overhang, YELLOW], [th.overhang + 15, ORANGE], [90, RED]], v, out);
+    return lerp3(overhangStops(), v, out);
   }
   if (Math.abs(v) <= th.distTol) return out.copy(NEUTRAL);
   const t = Math.min(1, Math.abs(v) / th.distRange);
@@ -45,7 +51,7 @@ export function legend(w: Check): { gradient: string; ticks: string[] } {
     ticks: ['0', `${th.thinWall} mm (thin)`, `${+(th.thinWall * 2).toFixed(2)}`, `${+(th.thinWall * 6).toFixed(2)}+ mm`],
   };
   if (w === 'overhang') return {
-    gradient: `linear-gradient(90deg, ${css(NEUTRAL)} 0%, ${css(NEUTRAL)} 39%, ${css(YELLOW)} 50%, ${css(ORANGE)} 67%, ${css(RED)} 100%)`,
+    gradient: `linear-gradient(90deg, ${overhangStops().map(([x, c]) => `${css(c)} ${((x / 90) * 100).toFixed(1)}%`).join(', ')})`,
     ticks: ['0°', `${th.overhang}°`, '90° (ceiling)'],
   };
   return {
