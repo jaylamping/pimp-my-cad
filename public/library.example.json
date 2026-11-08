@@ -1,0 +1,6 @@
+{
+  "items": [
+    { "title": "Bracket (print)", "path": "designs/bracket/bracket.3mf", "url": "files/bracket.3mf" },
+    { "title": "Arm assembly", "path": "designs/arm/arm.glb", "url": "files/arm.glb" }
+  ]
+}
