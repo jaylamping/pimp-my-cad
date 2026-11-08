@@ -5,7 +5,7 @@
 // assembly without doing any CAD work itself. Results are cached by the STEP's
 // SHA-256, so re-opening the same revision is instant.
 //
-// Python: set PIMP_PYTHON to the interpreter that has cadquery-ocp installed,
+// Python: set TANDEMCAD_PYTHON to the interpreter that has cadquery-ocp installed,
 // otherwise "python3" (or "python" on Windows) from PATH.
 import type { Plugin, Connect } from 'vite';
 import { spawn } from 'node:child_process';
@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const script = resolve(here, '../tools/step2glb/step2glb.py');
 const cacheDir = resolve(here, '../node_modules/.cache/step2glb');
-const python = process.env.PIMP_PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
+const python = process.env.TANDEMCAD_PYTHON || process.env.PIMP_PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
 // a new converter version gets a fresh cache
 const scriptHash = createHash('sha256').update(readFileSync(script)).digest('hex').slice(0, 12);
 const MAX_BYTES = 512 * 1024 * 1024;
@@ -44,7 +44,7 @@ function run(args: string[]): Promise<void> {
     const p = spawn(python, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let err = '';
     p.stderr.on('data', (d) => { err += d; });
-    p.on('error', (e) => fail(new Error(`could not start ${python}: ${e.message}. Install Python 3 and "pip install -r tools/step2glb/requirements.txt", or set PIMP_PYTHON.`)));
+    p.on('error', (e) => fail(new Error(`could not start ${python}: ${e.message}. Install Python 3 and "pip install -r tools/step2glb/requirements.txt", or set TANDEMCAD_PYTHON.`)));
     p.on('close', (code) => (code === 0 ? ok() : fail(new Error(err.trim().split('\n').slice(-6).join('\n') || `exit ${code}`))));
   });
 }
@@ -88,7 +88,7 @@ const middleware: Connect.NextHandleFunction = async (req, res, next) => {
 
 export function step2glb(): Plugin {
   return {
-    name: 'pimp-my-cad:step2glb',
+    name: 'tandemcad:step2glb',
     configureServer(server) { server.middlewares.use(middleware); },
     configurePreviewServer(server) { server.middlewares.use(middleware); },
   };
