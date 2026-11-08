@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Part Review</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header id="bar">
+    <select id="library" title="Open a part from the library"><option value="">Open part…</option></select>
+    <label class="btn" title="Open a local 3MF / STL / GLB">File<input id="file" type="file" accept=".3mf,.stl,.glb,.gltf" hidden /></label>
+    <div class="seg" id="modes">
+      <button data-mode="select" class="on" title="Select a part (S)">Select</button>
+      <button data-mode="pin" title="Tap a spot to pin a comment (C)">Comment</button>
+      <button data-mode="measure" title="Tap two points (M)">Measure</button>
+    </div>
+    <select id="views" title="Camera view">
+      <option value="iso">Iso</option><option value="front">Front</option><option value="back">Back</option>
+      <option value="left">Left</option><option value="right">Right</option><option value="top">Top</option><option value="bottom">Bottom</option>
+    </select>
+    <button id="fit" class="btn" title="Fit (F)">Fit</button>
+    <span id="status"></span>
+    <div class="spacer"></div>
+    <button id="toggle-left" class="btn mobile">Parts</button>
+    <button id="toggle-right" class="btn mobile">Notes <b id="open-count"></b></button>
+  </header>
+  <main>
+    <aside id="left" class="panel">
+      <section>
+        <h3>Explode</h3>
+        <input id="explode" type="range" min="0" max="1.5" step="0.01" value="0" />
+      </section>
+      <section>
+        <h3>Section</h3>
+        <div class="row">
+          <select id="sec-axis"><option value="">Off</option><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select>
+          <label class="chk"><input id="sec-flip" type="checkbox" />Flip</label>
+        </div>
+        <input id="sec-pos" type="range" min="0" max="1" step="0.002" value="0.5" />
+      </section>
+      <section>
+        <h3>Parts <label class="chk small"><input id="show-mod" type="checkbox" checked />modifiers</label></h3>
+        <ul id="tree"></ul>
+      </section>
+      <section id="info"></section>
+    </aside>
+    <div id="view"></div>
+    <aside id="right" class="panel">
+      <div class="row between"><h3>Comments</h3>
+        <select id="filter"><option value="open">Open</option><option value="all">All</option><option value="part">Selected part</option></select>
+      </div>
+      <form id="composer" hidden>
+        <div class="target" id="c-target"></div>
+        <div class="seg sev" id="c-sev">
+          <button type="button" data-v="blocker">Blocker</button><button type="button" data-v="major" class="on">Major</button>
+          <button type="button" data-v="minor">Minor</button><button type="button" data-v="note">Note</button>
+        </div>
+        <textarea id="c-text" rows="3" placeholder="What's wrong?" required></textarea>
+        <textarea id="c-fix" rows="2" placeholder="Suggested fix (optional)"></textarea>
+        <div class="row"><button class="btn primary" type="submit">Pin comment</button><button class="btn" type="button" id="c-cancel">Cancel</button></div>
+      </form>
+      <ol id="comments"></ol>
+      <div class="row foot">
+        <button class="btn" id="export">Export JSON</button>
+        <label class="btn">Import<input id="import" type="file" accept=".json" hidden /></label>
+      </div>
+    </aside>
+  </main>
+  <div id="drop">Drop a 3MF, STL or GLB</div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
