@@ -23,8 +23,11 @@ const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 async function open(buf: ArrayBuffer, path: string, title = path.split('/').pop()!) {
   status(`Loading ${title}…`);
   const t0 = performance.now();
-  const { root, upAxis } = await loadModel(buf, path);
-  const sha = await sha256(buf).catch(() => 'unhashed');
+  let loaded;
+  try { loaded = await loadModel(buf, path); }
+  catch (e) { status(`${title}: ${(e as Error).message}`); return; }
+  const { root, upAxis, rev, note } = loaded;
+  const sha = rev ?? await sha256(buf).catch(() => 'unhashed');
   viewer.setModel(root, upAxis);
   const doc = await store.load(path);
   current = { path, title, sha, doc };
@@ -35,7 +38,7 @@ async function open(buf: ArrayBuffer, path: string, title = path.split('/').pop(
   buildTree();
   renderComments();
   const tris = viewer.meshes.reduce((n, m) => n + (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3, 0);
-  status(fileStatus = `${title} · ${viewer.meshes.length} bodies · ${(tris / 1000).toFixed(0)}k tris · rev ${sha.slice(0, 8)} · ${Math.round(performance.now() - t0)} ms`);
+  status(fileStatus = `${title}${note ? ` (${note})` : ''} · ${viewer.meshes.length} bodies · ${(tris / 1000).toFixed(0)}k tris · rev ${sha.slice(0, 8)} · ${Math.round(performance.now() - t0)} ms`);
   const want = new URLSearchParams(location.hash.slice(1)).get('c');
   if (want) focusComment(want);
 }
@@ -68,7 +71,7 @@ async function initLibrary() {
   const want = new URLSearchParams(location.hash.slice(1)).get('file');
   const it = library.find((i) => i.path === want) || library[0];
   if (it) { sel.value = it.path; await openUrl(it); }
-  else status('Drop a 3MF, STL or GLB anywhere, or press File');
+  else status('Drop a 3MF, STEP, STL or GLB anywhere, or press File');
 }
 
 $<HTMLInputElement>('#file').onchange = async (e) => {
@@ -87,7 +90,20 @@ document.addEventListener('drop', async (e) => {
 function buildTree() {
   const ul = $('#tree');
   ul.innerHTML = '';
+  // Assemblies: head each run of parts with its sub-assembly path, since
+  // instance names like "bracket-1" repeat across sub-assemblies.
+  const groupOf = (p: string) => p.split('/').slice(1, -1).join(' / ');
+  const grouped = new Set(viewer.meshes.map((m) => groupOf(m.userData.part))).size > 1;
+  let lastGroup: string | null = null;
   for (const m of viewer.meshes) {
+    const g = groupOf(m.userData.part);
+    if (grouped && g !== lastGroup) {
+      const h = document.createElement('li');
+      h.className = 'grp';
+      h.textContent = g || '(top level)';
+      ul.appendChild(h);
+      lastGroup = g;
+    }
     const li = document.createElement('li');
     li.dataset.part = m.userData.part;
     const col = '#' + (m.userData.baseColor as number).toString(16).padStart(6, '0');
@@ -114,8 +130,7 @@ function selectMesh(m: THREE.Mesh | null) {
   const info = $('#info');
   if (!m) { info.innerHTML = ''; return; }
   const box = new THREE.Box3().setFromObject(m);
-  const s = viewer.model!.scale.x * viewer.model!.parent!.scale.x;
-  const size = box.getSize(new THREE.Vector3()).divideScalar(s);
+  const size = box.getSize(new THREE.Vector3()); // the viewer shows every model in mm
   const st = m.userData.settings as Record<string, string> | undefined;
   info.innerHTML = `<h3>Selected</h3><div><code>${esc(m.userData.part)}</code></div>
     <div>Bounds ${size.x.toFixed(1)} × ${size.y.toFixed(1)} × ${size.z.toFixed(1)} mm</div>
