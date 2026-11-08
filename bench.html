@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Print-check GPU bench</title>
+</head>
+<body>
+  <header>
+    <b>Print-check GPU bench</b> <span class="sub">gpu.js vs three.js WebGPU / TSL</span>
+    <span id="status"></span>
+  </header>
+  <main>
+    <section id="controls">
+      <details open>
+        <summary>Setup</summary>
+        <label>Part <select id="mesh"></select></label>
+        <label>Older revision (distance) <select id="rev"></select></label>
+        <label title="Splits every triangle into k² pieces: more samples and more triangles, same shape">Subdivide k
+          <select id="k"><option>1</option><option>2</option><option>3</option><option>4</option><option>6</option><option>8</option></select></label>
+        <label>Warm runs <input id="runs" type="number" min="1" max="10" value="3" /></label>
+        <label><input id="brute" type="checkbox" checked /> Brute force too, on at most <input id="bruteCap" type="number" value="4096" step="1024" /> samples</label>
+        <fieldset><legend>Checks</legend><div id="workloads"></div></fieldset>
+        <fieldset><legend>Engines</legend><div id="engines"></div></fieldset>
+        <div class="buttons">
+          <button id="run" class="primary">Run</button>
+          <button id="sweep" title="BVH paths at k = 1…8 until each engine fails or takes over 15 s">Push it (k sweep)</button>
+        </div>
+      </details>
+      <details>
+        <summary>Heatmap thresholds</summary>
+        <label>Thin wall below (mm) <input id="thinWall" type="number" step="0.1" value="1.2" /></label>
+        <label>Overhang past (°) <input id="overhangDeg" type="number" step="5" value="45" /></label>
+        <label>Distance colour range (mm) <input id="distRange" type="number" step="0.1" value="0.5" /></label>
+      </details>
+    </section>
+    <section id="stage">
+      <div id="view"></div>
+      <div id="legend"></div>
+    </section>
+    <section id="results">
+      <div class="bar">
+        <span id="env"></span>
+        <span class="spacer"></span>
+        <button id="copy">Copy JSON</button><button id="download">Download</button><button id="clear">Clear</button>
+      </div>
+      <div class="scroll">
+        <table>
+          <thead><tr>
+            <th>check</th><th>engine</th><th>algo</th><th>k</th><th>samples</th><th>tris</th><th title="BVH build on the CPU">prep ms</th>
+            <th title="first call: shader compile + upload + run + readback">cold ms</th>
+            <th title="median of the warm runs: upload + run + readback">warm ms</th>
+            <th title="GPU timestamp queries (three WebGPU only)">gpu ms</th>
+            <th>M samples/s</th><th title="vs three-mesh-bvh on the CPU, mm or degrees">max err</th><th title="within 0.01 of the reference">ok</th>
+          </tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <p class="hint">Tap a row with a full sample set to paint its heatmap. Brute-force rows use a strided subset.</p>
+    </section>
+  </main>
+  <script type="module" src="/src/bench/main.ts"></script>
+</body>
+</html>
