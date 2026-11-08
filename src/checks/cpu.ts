@@ -42,12 +42,22 @@ export async function wall(s: Soup, bvh: MeshBVH, progress?: (f: number) => void
   return out;
 }
 
+const _l = new THREE.Line3(), _c = new THREE.Vector3();
+/** True when `pt` (on `tri`) lies on one of its edges, where neighbouring faces also own that point. */
+function nearBoundary(tri: THREE.Triangle, pt: THREE.Vector3, eps = 1e-4): boolean {
+  for (const [a, b] of [[tri.a, tri.b], [tri.b, tri.c], [tri.c, tri.a]]) {
+    _l.set(a, b).closestPointToPoint(pt, true, _c);
+    if (_c.distanceToSquared(pt) < eps * eps) return true;
+  }
+  return false;
+}
+
 /** CPU fallback: signed distance from `s`'s samples to the baseline surface (+ = outside it). */
 export async function distance(s: Soup, bvhA: MeshBVH, progress?: (f: number) => void): Promise<Float32Array> {
   const out = new Float32Array(s.sampleCount);
   const p = new THREE.Vector3(), d = new THREE.Vector3();
   const target = { point: new THREE.Vector3(), distance: 0, faceIndex: 0 };
-  const tri = new THREE.Triangle(), nrm = new THREE.Vector3();
+  const tri = new THREE.Triangle(), nrm = new THREE.Vector3(), pr = new THREE.Ray();
   const pos = bvhA.geometry.getAttribute('position');
   const idx = bvhA.geometry.index!;
   let last = performance.now();
@@ -57,7 +67,14 @@ export async function distance(s: Soup, bvhA: MeshBVH, progress?: (f: number) =>
     const f = target.faceIndex;
     tri.setFromAttributeAndIndices(pos, idx.getX(f * 3), idx.getX(f * 3 + 1), idx.getX(f * 3 + 2));
     tri.getNormal(nrm);
-    out[i] = (nrm.dot(d.copy(p).sub(target.point)) >= 0 ? 1 : -1) * target.distance;
+    let outside = nrm.dot(d.copy(p).sub(target.point)) >= 0;
+    // On an edge or vertex several faces share the closest point and the single face normal can
+    // give the wrong side: decide by ray parity (odd crossings = inside a closed baseline).
+    if (target.distance > 1e-6 && nearBoundary(tri, target.point)) {
+      pr.origin.copy(p); pr.direction.set(0.5773, 0.5774, 0.5775).normalize();
+      outside = bvhA.raycast(pr, THREE.DoubleSide).length % 2 === 0;
+    }
+    out[i] = (outside ? 1 : -1) * target.distance;
     if ((i & 1023) === 0 && performance.now() - last > 40) { progress?.(i / s.sampleCount); await tick(); last = performance.now(); }
   }
   return out;

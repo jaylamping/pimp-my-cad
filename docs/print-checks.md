@@ -15,6 +15,6 @@ three-mesh-bvh's WebGPU API is marked unstable; pin versions when upgrading thre
 
 **Outlier filter.** Wall thickness: about 0.0004 % of samples (edge-grazing rays) come back 10-20 mm too *large* on every engine. A corner reading more than 5 mm above the median of its triangle's three corners is clamped to that median (`filterWallOutliers` in `src/checks/cpu.ts`). Low readings are never touched, so a genuinely thin spot is never hidden (a flat face can vary in thickness). The count is shown next to the timing.
 
-**Known limits** (from the Codex review): closest-face normals can give the wrong distance sign at sharp edges (no pseudonormals yet); 3MF revisions are recentred per file by the loader, so a baseline from a differently-bounded revision can be offset; soup extraction and BVH build run on the main thread (no worker yet); instanced meshes are rejected; models too big for one WebGPU storage binding fall back to the CPU.
+**Known limits** (from the Codex review): on the CPU path the distance sign at sharp edges is decided by ray parity; the WebGPU path still uses closest-face normals there (no pseudonormals yet). Soup extraction and BVH build run on the main thread (no worker yet); instanced meshes are rejected; models too big for one WebGPU storage binding fall back to the CPU. 3MF revisions are compared in their original bed coordinates (the loader's per-file recentring is undone).
 
 **Agents / debugging.** `window.pmcChecks` is the `PrintChecks` instance (`run('wall')`, `captureBaseline()`, `clear()`).

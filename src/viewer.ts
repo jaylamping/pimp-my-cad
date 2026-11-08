@@ -125,7 +125,14 @@ export class Viewer {
   }
 
   /** Offset the viewer applies to seat the model on the grid; print checks subtract it. */
-  frameOffset(): THREE.Vector3 { return this.pivot.position.clone(); }
+  frameOffset(): THREE.Vector3 {
+    const o = this.pivot.position.clone();
+    // The 3MF loader re-centres every revision on its own bounds; undo that so a grown or shrunk
+    // body keeps its unchanged part in the same place when compared with an older revision.
+    const rc = this.model?.userData.recenter as number[] | undefined;
+    if (rc) o.sub(new THREE.Vector3(rc[0], rc[1], rc[2]).applyEuler(this.pivot.rotation));
+    return o;
+  }
 
   private bbox() { return new THREE.Box3().setFromObject(this.pivot); }
 
