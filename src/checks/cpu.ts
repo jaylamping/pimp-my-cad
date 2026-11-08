@@ -1,14 +1,15 @@
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
-import { queryTris, type Soup } from './soup';
+import type { Soup } from './soup';
+import { buildPseudo, signAt } from './pseudo';
 
 /** Rays that travel further than this report WALL_MAX (open mesh or very thick). */
 export const WALL_MAX = 20; // mm
 /** Faces this close to the lowest point sit on the bed; they are not overhangs. */
 export const BED_EPS = 0.2; // mm
 
-export function bvhFor(s: Soup): MeshBVH {
-  return new MeshBVH(new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(queryTris(s), 3)));
+export function bvhFromTris(tris: Float32Array): MeshBVH {
+  return new MeshBVH(new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(tris, 3)));
 }
 
 /** Degrees past vertical for down-facing faces: 0 = wall or up-facing, 90 = flat ceiling. Y is up. */
@@ -26,7 +27,8 @@ export function overhang(s: Soup): Float32Array {
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
 /** CPU fallback for wall thickness (no WebGPU). Yields to the UI between chunks. */
-export async function wall(s: Soup, bvh: MeshBVH, progress?: (f: number) => void): Promise<Float32Array> {
+export async function wall(s: Pick<Soup, 'samples' | 'normals' | 'valid' | 'sampleCount'>, queryTrisArr: Float32Array, progress?: (f: number) => void): Promise<Float32Array> {
+  const bvh = bvhFromTris(queryTrisArr);
   const out = new Float32Array(s.sampleCount);
   const ray = new THREE.Ray();
   let last = performance.now();
@@ -42,22 +44,14 @@ export async function wall(s: Soup, bvh: MeshBVH, progress?: (f: number) => void
   return out;
 }
 
-const _l = new THREE.Line3(), _c = new THREE.Vector3();
-/** True when `pt` (on `tri`) lies on one of its edges, where neighbouring faces also own that point. */
-function nearBoundary(tri: THREE.Triangle, pt: THREE.Vector3, eps = 1e-4): boolean {
-  for (const [a, b] of [[tri.a, tri.b], [tri.b, tri.c], [tri.c, tri.a]]) {
-    _l.set(a, b).closestPointToPoint(pt, true, _c);
-    if (_c.distanceToSquared(pt) < eps * eps) return true;
-  }
-  return false;
-}
-
 /** CPU fallback: signed distance from `s`'s samples to the baseline surface (+ = outside it). */
-export async function distance(s: Soup, bvhA: MeshBVH, progress?: (f: number) => void): Promise<Float32Array> {
+export async function distance(s: Pick<Soup, 'samples' | 'sampleCount'>, baseTris: Float32Array, progress?: (f: number) => void): Promise<Float32Array> {
+  const bvhA = bvhFromTris(baseTris);
+  const ps = buildPseudo(baseTris);
   const out = new Float32Array(s.sampleCount);
-  const p = new THREE.Vector3(), d = new THREE.Vector3();
+  const p = new THREE.Vector3();
   const target = { point: new THREE.Vector3(), distance: 0, faceIndex: 0 };
-  const tri = new THREE.Triangle(), nrm = new THREE.Vector3(), pr = new THREE.Ray();
+  const tri = new THREE.Triangle(), bc = new THREE.Vector3();
   const pos = bvhA.geometry.getAttribute('position');
   const idx = bvhA.geometry.index!;
   let last = performance.now();
@@ -65,16 +59,11 @@ export async function distance(s: Soup, bvhA: MeshBVH, progress?: (f: number) =>
     p.set(s.samples[i * 3], s.samples[i * 3 + 1], s.samples[i * 3 + 2]);
     if (!bvhA.closestPointToPoint(p, target)) { out[i] = 0; continue; }
     const f = target.faceIndex;
-    tri.setFromAttributeAndIndices(pos, idx.getX(f * 3), idx.getX(f * 3 + 1), idx.getX(f * 3 + 2));
-    tri.getNormal(nrm);
-    let outside = nrm.dot(d.copy(p).sub(target.point)) >= 0;
-    // On an edge or vertex several faces share the closest point and the single face normal can
-    // give the wrong side: decide by ray parity (odd crossings = inside a closed baseline).
-    if (target.distance > 1e-6 && nearBoundary(tri, target.point)) {
-      pr.origin.copy(p); pr.direction.set(0.5773, 0.5774, 0.5775).normalize();
-      outside = bvhA.raycast(pr, THREE.DoubleSide).length % 2 === 0;
-    }
-    out[i] = (outside ? 1 : -1) * target.distance;
+    const a = idx.getX(f * 3), b = idx.getX(f * 3 + 1), c = idx.getX(f * 3 + 2);
+    tri.setFromAttributeAndIndices(pos, a, b, c);
+    tri.getBarycoord(target.point, bc);
+    // the BVH reorders triangles but keeps their vertices, so a/3 is the original triangle
+    out[i] = signAt(ps, Math.floor(a / 3), bc.x, bc.y, bc.z, p.x, p.y, p.z) * target.distance;
     if ((i & 1023) === 0 && performance.now() - last > 40) { progress?.(i / s.sampleCount); await tick(); last = performance.now(); }
   }
   return out;

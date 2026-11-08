@@ -3,6 +3,7 @@ import { buildSoup, sources, queryTris, type Soup } from './soup';
 import * as cpu from './cpu';
 import { colour, legend, thresholds, type Check } from './colors';
 import type { GpuChecks } from './gpu';
+import { CpuRunner } from './cpuRunner';
 import type { Viewer } from '../viewer';
 
 export { thresholds, legend, type Check };
@@ -24,12 +25,13 @@ export class PrintChecks {
   active: Check | null = null;
   /** Bumped by anything that invalidates in-flight runs (new run, clear, reset, baseline change). */
   private gen = 0;
+  private cpuRunner = new CpuRunner();
   onBaseline: (label: string | null) => void = () => {};
 
   constructor(private viewer: Viewer) {}
 
   /** The model was replaced: drop everything tied to the old meshes (keeps the baseline). */
-  reset() { this.gen++; this.soup = null; this.cache.clear(); this.active = null; }
+  reset() { this.gen++; this.cpuRunner.cancel(); this.soup = null; this.cache.clear(); this.active = null; }
 
   hasBaseline() { return !!this.baseline; }
 
@@ -41,6 +43,7 @@ export class PrintChecks {
     soup.ranges = []; // numbers only: don't keep the old meshes alive
     this.baseline = soup;
     this.gen++;
+    this.cpuRunner.cancel();
     this.cache.delete('distance');
     this.onBaseline(label);
   }
@@ -59,6 +62,8 @@ export class PrintChecks {
     const soup = buildSoup(this.viewer.meshes, this.viewer.frameOffset());
     if (!queryTris(soup).length) throw new Error('Nothing visible to check');
     const baseline = this.baseline;
+    await new Promise((r) => setTimeout(r, 0)); // let the UI paint "Computing…" before the heavy part
+    stale();
     const prog = progress && ((f: number) => { if (my === this.gen) progress(f); });
     let engine: Report['engine'] = 'cpu';
     let values: Float32Array;
@@ -78,7 +83,7 @@ export class PrintChecks {
         if (kind === 'wall') gpu.forget(soup.id); // per-run BVH; the baseline's is kept until replaced
       }
       stale();
-      if (!res) res = kind === 'wall' ? await cpu.wall(soup, cpu.bvhFor(soup), prog) : await cpu.distance(soup, cpu.bvhFor(baseline!), prog);
+      if (!res) res = await this.cpuRunner.run(kind, soup, baseline, prog);
       values = res;
       if (kind === 'wall') outliers = cpu.filterWallOutliers(values);
       // degenerate triangles get a neutral value
@@ -129,6 +134,7 @@ export class PrintChecks {
   /** Back to the normal part colours. */
   clear() {
     this.gen++;
+    this.cpuRunner.cancel();
     for (const m of this.viewer.meshes) {
       const src = sources.get(m);
       if (!src) continue;
