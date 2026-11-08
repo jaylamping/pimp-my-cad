@@ -44,7 +44,8 @@ const params = new URLSearchParams(location.search);
 
 let view: HeatView;
 let tsl: TslRunner;
-let library: { name: string; url: string; revisions: { name: string; url: string }[] }[] = [];
+type Rev = { name: string; url: string; fileName?: string };
+let library: { name: string; url: string; fileName?: string; revisions: Rev[] }[] = [];
 let current: { key: string; B: Prepared; A: Prepared | null } | null = null;
 let shown: Row | null = null;
 
@@ -60,13 +61,34 @@ async function loadLibrary() {
     library = (await (await fetch('/samples/bench.json')).json()).meshes;
   } catch {
     library = [];
-    status('No public/samples/bench.json. Run scripts/fetch-bench-samples.sh, or open a file.');
+    status('No sample meshes yet: run `npm run bench:samples`, or use Open part… below.');
   }
-  const sel = $<HTMLSelectElement>('mesh');
-  sel.innerHTML = library.map((m, i) => `<option value="${i}">${m.name}</option>`).join('');
-  if (params.get('mesh')) sel.value = String(Math.max(0, library.findIndex((m) => m.name === params.get('mesh'))));
-  sel.onchange = () => { fillRevisions(); void ensureLoaded(); };
+  fillParts();
+  if (params.get('mesh')) $<HTMLSelectElement>('mesh').value = String(Math.max(0, library.findIndex((m) => m.name === params.get('mesh'))));
+  $<HTMLSelectElement>('mesh').onchange = () => { fillRevisions(); void ensureLoaded(); };
   fillRevisions();
+}
+function fillParts(select?: number) {
+  const sel = $<HTMLSelectElement>('mesh');
+  sel.innerHTML = library.length ? library.map((m, i) => `<option value="${i}">${m.name}</option>`).join('') : '<option value="-1">(none: open a part)</option>';
+  if (select != null) sel.value = String(select);
+}
+/** Files picked from disk. Blob URLs keep them in the browser; nothing is uploaded. */
+async function openFiles(files: FileList | null, asRevision: boolean) {
+  if (!files?.length) return;
+  if (asRevision) {
+    const m = library[+$<HTMLSelectElement>('mesh').value];
+    if (!m) { status('Open a part first, then its older revision.'); return; }
+    const f = files[0];
+    m.revisions.push({ name: f.name, url: URL.createObjectURL(f), fileName: f.name });
+    fillRevisions();
+    $<HTMLSelectElement>('rev').value = String(m.revisions.length - 1);
+  } else {
+    for (const f of Array.from(files)) library.push({ name: f.name.replace(/\.[^.]+$/, ''), url: URL.createObjectURL(f), fileName: f.name, revisions: [] });
+    fillParts(library.length - 1);
+    fillRevisions();
+  }
+  await ensureLoaded();
 }
 function fillRevisions() {
   const m = library[+$<HTMLSelectElement>('mesh').value];
@@ -84,19 +106,20 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 
 async function ensureLoaded(): Promise<{ B: Prepared; A: Prepared | null }> {
   const m = library[+$<HTMLSelectElement>('mesh').value];
+  if (!m) throw new Error('No part loaded. Run `npm run bench:samples` or use Open part…');
   const k = +$<HTMLSelectElement>('k').value;
   const ri = +$<HTMLSelectElement>('rev').value;
   const key = `${m.url}|${ri}|${k}`;
   if (current?.key === key) return current;
   status(`Loading ${m.name}…`);
-  const B = prepare(subdivide(await loadMesh(m.url), k), m.name);
+  const B = prepare(subdivide(await loadMesh(m.url, m.fileName), k), m.name);
   let A: Prepared | null = null;
   if (ri >= 0 && m.revisions[ri]) {
-    A = prepare(subdivide(await loadMesh(m.revisions[ri].url), k), m.revisions[ri].name);
+    A = prepare(subdivide(await loadMesh(m.revisions[ri].url, m.revisions[ri].fileName), k), m.revisions[ri].name);
   } else {
     // no older revision: compare against the same part nudged 0.3 mm up, so the check still has
     // something to measure (every sample should read about -0.3 mm)
-    const g = subdivide(await loadMesh(m.url), k);
+    const g = subdivide(await loadMesh(m.url, m.fileName), k);
     g.translate(0, 0, 0.3);
     A = prepare(g, `${m.name} +0.3 mm Z`);
   }
@@ -418,6 +441,8 @@ async function main() {
     view.resume();
     document.body.classList.remove('busy');
   };
+  $<HTMLInputElement>('openPart').onchange = (e) => busy(() => openFiles((e.target as HTMLInputElement).files, false));
+  $<HTMLInputElement>('openRev').onchange = (e) => busy(() => openFiles((e.target as HTMLInputElement).files, true));
   $('run').onclick = () => busy(() => runAll());
   $('sweep').onclick = () => busy(sweep);
   $('clear').onclick = () => { rows.length = 0; shown = null; if (current) view.paint(current.B, null, null); $('legend').innerHTML = ''; renderTable(); };

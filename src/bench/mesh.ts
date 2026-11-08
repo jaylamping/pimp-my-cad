@@ -25,9 +25,10 @@ export type Prepared = {
   bounds: THREE.Box3;
 };
 
-export async function loadMesh(url: string): Promise<THREE.BufferGeometry> {
+/** `fileName` matters for blob: URLs (opened files), which carry no extension to sniff the type from. */
+export async function loadMesh(url: string, fileName = url): Promise<THREE.BufferGeometry> {
   const buf = await (await fetch(url)).arrayBuffer();
-  return parseMesh(buf, url);
+  return parseMesh(buf, fileName);
 }
 
 export function parseMesh(buf: ArrayBuffer, name: string): THREE.BufferGeometry {
