@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "pimp-my-cad",
+  "productName": "TandemCAD",
   "version": "0.1.0",
-  "identifier": "app.pimpmycad.desktop",
+  "identifier": "app.tandemcad.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "title": "pimp-my-cad", "width": 1400, "height": 900, "dragDropEnabled": true }],
+    "windows": [{ "title": "TandemCAD", "width": 1400, "height": 900, "dragDropEnabled": true }],
     "security": { "csp": null }
   },
   "bundle": {
