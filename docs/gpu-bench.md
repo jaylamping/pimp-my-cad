@@ -23,19 +23,32 @@ No samples? Use **Open part…** (STL or 3MF) and **Open older revision…** on 
 
 Engines: CPU three-mesh-bvh (reference), gpu.js on WebGL2 / WebGPU / wasm SIMD+threads / plain cpu, and three's WebGPU renderer running TSL compute plus three-mesh-bvh's WGSL BVH (`BVHComputeData`). `?display=webgl` renders through WebGL while compute stays on WebGPU. The page is cross-origin isolated (see `vite.config.ts`) so gpu.js's wasm threads work. "Copy JSON" / "Download" export every row with the environment, so device runs can be pasted back.
 
-## What this session could and could not measure
+## Results: RTX 5080, Chrome 156 on Windows (Joey, 2026-11-08)
 
-The sandbox has no GPU: Chromium runs WebGPU and WebGL on SwiftShader (software Vulkan on 4 CPU cores). The iPhone run used Playwright's iPhone 15 viewport and user agent on the same software stack, so it checks layout and the phone code path, **not iPhone GPU speed**. Absolute timings below are therefore not predictive. Real WebGL2/WebGPU numbers on Joey's PC and iPhone are the open item.
+One part (43,862 triangles at k=1), k-sweep with brute force off, warm runs in ms. A warm run is upload + compute + readback, so it is what an app would see per check. wasm is cut off above 2M samples by design.
 
-Upper arm, k=1 (144k samples, 48k triangles), software GPU, ms warm:
+| check | k (samples) | CPU, main thread | gpu.js WebGL2 | gpu.js WebGPU | gpu.js wasm | three TSL + BVH |
+| --- | --- | --- | --- | --- | --- | --- |
+| overhang | 1 (132k) | 1.5 | 3.2 | 4.0 | 3.0 | 8.1 |
+| overhang | 6 (4.7M) | 36.5 | 31.9 | 46.1 | | 39.9 |
+| wall thickness | 1 (132k) | 336 | 6.4 | 6.0 | 25.2 | 7.1 |
+| wall thickness | 4 (2.1M) | 4,947 | 67.2 | 39.4 | 323 | 28.0 |
+| wall thickness | 6 (4.7M) | 11,117 | 145 | 86.6 | | **51.8** |
+| distance to older revision | 1 (132k) | 355 | 8.4 | 5.6 | 34.8 | 6.9 |
+| distance to older revision | 4 (2.1M) | 7,532 | 92.7 | 39.9 | 725 | 24.5 |
+| distance to older revision | 6 (4.7M) | 20,089 | 246 | 88.3 | | **50.4** |
 
-| check | CPU bvh | gpu.js webgl2 | gpu.js webgpu | gpu.js wasm | three TSL |
-| --- | --- | --- | --- | --- | --- |
-| overhang | 4.5 | 5.4 | 8.6 | 4.5 | 12.4 |
-| wall thickness (BVH) | 557 | 1,102 | 599 | 176 | 896 |
-| revision distance (BVH) | 698 | 2,875 | 1,720 | 357 | 1,501 |
+- **Overhang is a CPU job.** One `asin` per sample takes 1.5 ms at normal size and 36 ms at 4.7M samples. The GPU never beats it because transfer costs more than the maths.
+- **Wall thickness and distance are GPU jobs**: 50 to 400x faster than the CPU at scale. For a normal part both libraries answer in 6 to 8 ms.
+- **The libraries separate at scale.** At k=1 they tie (6 to 7 ms). By 4.7M samples three TSL with three-mesh-bvh is 1.7x faster than gpu.js WebGPU and about 3-5x faster than gpu.js WebGL2, and the gap is still widening. three's GPU timer says the compute itself is 13 ms (wall) and 23 ms (distance) of those totals, so the rest is transfer.
+- **gpu.js wasm** is a credible fallback for mid-size parts (0.3 to 0.7 s for 2M samples, 10 to 15x faster than the main-thread CPU) and far behind the GPU engines.
+- **Memory.** An earlier sweep that went to k=8 (8.4M samples) took two Chrome processes past 10 GB. The sweep now frees buffers between sizes and stops at k=6.
+- **Rare wall-thickness outliers.** From k=3 up, 1 to 14 of millions of samples differ from the CPU reference by 10 to 20 mm on every engine, three included (about 0.0004 % of samples; p99 error is 1e-5 mm). They are most likely rays grazing a triangle edge, where float32 on the GPU and float64 on the CPU disagree on hit or miss. I have not traced individual samples, so this is a hypothesis.
+- **Distance sign** agrees on 99.8 to 99.9 % of samples at every size; the rest sit on the surface, where the sign is noise.
 
-The k=8 sweep did not finish inside the sandbox's time limit, so there is no scaling data yet.
+## What the sandbox could and could not measure
+
+The sandbox has no GPU: Chromium runs WebGPU and WebGL on SwiftShader (software Vulkan), so its timings are not predictive. The iPhone run used Playwright's iPhone 15 viewport and user agent, so it checks layout only. Mobile is shelved for now, so iPhone numbers were not collected.
 
 ## Findings that do not depend on hardware
 
@@ -48,4 +61,6 @@ The k=8 sweep did not finish inside the sandbox's time limit, so there is no sca
 
 ## Decision input
 
-Not enough to pick a winner yet: that needs the real-GPU numbers and the k sweep. The hardware-independent evidence says: TSL + three-mesh-bvh for the production overlays (shared device with the renderer, ordered BVH traversal, no readback), and gpu.js as a portable fallback or for kernels that do not need a BVH.
+Recommendation: **three TSL + three-mesh-bvh for the overlays.** It ties gpu.js at normal part sizes and is fastest as parts grow, it shares the renderer's device, and results can stay on the GPU to colour the mesh without a readback. Costs: three-mesh-bvh's WebGPU API is marked unstable and needs three r185+, and BVH queries need real WebGPU (WebView2 and current Chrome/Edge have it).
+
+gpu.js is a fine second choice, not a mistake: WebGPU backend within 2x at 4.7M samples, one kernel source for four backends. Its main advantage is the WebGL2 and wasm fallbacks for browsers without WebGPU, which matters less for a desktop app on WebView2. Run overhang on the CPU either way.
