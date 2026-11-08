@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
-import type { Soup } from './soup';
+import { queryTris, type Soup } from './soup';
 
 /** Rays that travel further than this report WALL_MAX (open mesh or very thick). */
 export const WALL_MAX = 20; // mm
@@ -8,7 +8,7 @@ export const WALL_MAX = 20; // mm
 export const BED_EPS = 0.2; // mm
 
 export function bvhFor(s: Soup): MeshBVH {
-  return new MeshBVH(new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(s.tris, 3)));
+  return new MeshBVH(new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(queryTris(s), 3)));
 }
 
 /** Degrees past vertical for down-facing faces: 0 = wall or up-facing, 90 = flat ceiling. Y is up. */
@@ -53,7 +53,7 @@ export async function distance(s: Soup, bvhA: MeshBVH, progress?: (f: number) =>
   let last = performance.now();
   for (let i = 0; i < s.sampleCount; i++) {
     p.set(s.samples[i * 3], s.samples[i * 3 + 1], s.samples[i * 3 + 2]);
-    bvhA.closestPointToPoint(p, target);
+    if (!bvhA.closestPointToPoint(p, target)) { out[i] = 0; continue; }
     const f = target.faceIndex;
     tri.setFromAttributeAndIndices(pos, idx.getX(f * 3), idx.getX(f * 3 + 1), idx.getX(f * 3 + 2));
     tri.getNormal(nrm);
@@ -65,10 +65,10 @@ export async function distance(s: Soup, bvhA: MeshBVH, progress?: (f: number) =>
 
 /**
  * Wall-thickness outlier filter. A ray from a corner that grazes an edge or slips through a
- * crack reports a distance far from the other two corners of the same flat triangle (the bench
- * found ~0.0004 % of samples 10-20 mm off, on every engine). A flat triangle has one face normal,
- * so its thickness barely varies; replace a corner that disagrees with the other two by the
- * median of the three.
+ * crack reports a distance far *larger* than the other two corners of the same triangle (the
+ * bench found ~0.0004 % of samples 10-20 mm off, on every engine). Corners that read more than
+ * `tol` above the median of their triangle are clamped to it. Corners that read *lower* are never
+ * touched: a flat face can genuinely vary in thickness, and a thin spot must not be hidden.
  */
 export function filterWallOutliers(values: Float32Array, tol = 5): number {
   let fixed = 0;
@@ -76,7 +76,7 @@ export function filterWallOutliers(values: Float32Array, tol = 5): number {
     const a = values[t], b = values[t + 1], c = values[t + 2];
     const med = Math.max(Math.min(a, b), Math.min(Math.max(a, b), c));
     for (let k = 0; k < 3; k++) {
-      if (Math.abs(values[t + k] - med) > tol) { values[t + k] = med; fixed++; }
+      if (values[t + k] - med > tol) { values[t + k] = med; fixed++; }
     }
   }
   return fixed;

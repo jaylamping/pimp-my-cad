@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { Viewer, Hit, Mode } from './viewer';
 import { loadModel, sha256, setNativeStepConverter } from './loaders';
 import * as desktop from './desktop';
-import { PrintChecks, thresholds, legend, type Check } from './checks';
+import { PrintChecks, CancelledError, thresholds, legend, type Check } from './checks';
 import { LocalStore, CommentStore, ReviewDoc, ReviewComment, Severity, newId } from './comments';
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector(s) as T;
@@ -32,7 +32,16 @@ async function open(buf: ArrayBuffer, path: string, title = path.split(/[\\/]/).
   const { root, upAxis, rev, note } = loaded;
   const sha = rev ?? await sha256(buf).catch(() => 'unhashed');
   // Live reload of the same file: the model on screen becomes the baseline the new one is compared to.
-  if (current?.path === path && viewer.model) checks.captureBaseline(`previous revision (${current.sha.slice(0, 8)})`);
+  // Only when the bytes changed (an identical re-save must not replace the useful baseline), and
+  // from the assembled, fully visible state so the comparison is not skewed by Explode / hidden parts.
+  if (current?.path === path && current.sha !== sha && viewer.model) {
+    const ex = $<HTMLInputElement>('#explode');
+    viewer.setExplode(0);
+    try { checks.captureBaseline(`previous revision (${current.sha.slice(0, 8)})`, true); }
+    catch { /* nothing usable to compare against */ }
+    viewer.setExplode(+ex.value);
+  }
+  checks.clear(); // restore and dispose overlay geometry on the old meshes before they are replaced
   viewer.setModel(root, upAxis);
   checks.reset();
   kindSel.value = '';
@@ -371,16 +380,19 @@ async function runCheck() {
   $('#chk-msg').textContent = 'Computing…';
   try {
     $('#chk-msg').textContent = (await checks.run(k, (f) => ($('#chk-msg').textContent = `Computing… ${Math.round(f * 100)}%`))).text;
-  } catch (e) { $('#chk-msg').textContent = (e as Error).message; }
+  } catch (e) { if (!(e instanceof CancelledError)) $('#chk-msg').textContent = (e as Error).message; }
 }
 checks.onBaseline = (l) => ($('#chk-base-info').textContent = l ? `Baseline: ${l}` : '');
 kindSel.onchange = runCheck;
 $('#chk-run').onclick = runCheck;
-$('#chk-base').onclick = () => { checks.captureBaseline(`${current?.title ?? 'model'} at ${new Date().toLocaleTimeString()}`); };
+$('#chk-base').onclick = () => {
+  try { checks.captureBaseline(`${current?.title ?? 'model'} at ${new Date().toLocaleTimeString()}`); }
+  catch (e) { $('#chk-msg').textContent = (e as Error).message; }
+};
 const bindTh = (id: string, set: (v: number) => void) => {
   $<HTMLInputElement>(id).onchange = (e) => { const v = +(e.target as HTMLInputElement).value; if (v > 0) { set(v); syncChecks(); checks.repaint(); } };
 };
-bindTh('#th-overhang', (v) => (thresholds.overhang = v));
+bindTh('#th-overhang', (v) => (thresholds.overhang = Math.min(80, Math.max(20, v))));
 bindTh('#th-wall', (v) => (thresholds.thinWall = v));
 bindTh('#th-dist', (v) => (thresholds.distRange = v));
 (window as any).pmcChecks = checks; // for agents / debugging, next to the planned window.pmc

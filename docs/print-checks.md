@@ -13,6 +13,8 @@ three-mesh-bvh's WebGPU API is marked unstable; pin versions when upgrading thre
 
 **Baseline.** "Set baseline" snapshots the model on screen. On the desktop app, when the opened file is re-exported and live-reloads, the previous revision becomes the baseline automatically. Run checks with Explode at 0: the checks use the current world positions.
 
-**Outlier filter.** Wall thickness: about 0.0004 % of samples (edge-grazing rays) come back 10-20 mm off on every engine. A flat triangle has one thickness, so a corner that differs from the median of its triangle's three corners by more than 5 mm is replaced by that median (`filterWallOutliers` in `src/checks/cpu.ts`). The count is shown next to the timing.
+**Outlier filter.** Wall thickness: about 0.0004 % of samples (edge-grazing rays) come back 10-20 mm too *large* on every engine. A corner reading more than 5 mm above the median of its triangle's three corners is clamped to that median (`filterWallOutliers` in `src/checks/cpu.ts`). Low readings are never touched, so a genuinely thin spot is never hidden (a flat face can vary in thickness). The count is shown next to the timing.
+
+**Known limits** (from the Codex review): closest-face normals can give the wrong distance sign at sharp edges (no pseudonormals yet); 3MF revisions are recentred per file by the loader, so a baseline from a differently-bounded revision can be offset; soup extraction and BVH build run on the main thread (no worker yet); instanced meshes are rejected; models too big for one WebGPU storage binding fall back to the CPU.
 
 **Agents / debugging.** `window.pmcChecks` is the `PrintChecks` instance (`run('wall')`, `captureBaseline()`, `clear()`).

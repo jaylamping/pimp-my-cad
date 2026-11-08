@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { WebGPURenderer, StorageBufferAttribute } from 'three/webgpu';
 import { Fn, storage, instanceIndex, float, wgslFn } from 'three/tsl';
 import { BVHComputeData } from 'three-mesh-bvh/webgpu';
-import { toVec4, type Soup } from './soup';
+import { toVec4, queryTris, type Soup } from './soup';
 import { WALL_MAX } from './cpu';
 
 /**
@@ -26,12 +26,14 @@ export class GpuChecks {
   /** Returns null when this webview has no real WebGPU (BVH queries need it). */
   static async create(): Promise<GpuChecks | null> {
     if (!('gpu' in navigator)) return null;
+    let renderer: WebGPURenderer | undefined;
     try {
-      const renderer = new WebGPURenderer({ antialias: false } as never);
+      renderer = new WebGPURenderer({ antialias: false } as never);
       await renderer.init();
       if (!(renderer.backend as any).isWebGPUBackend) { renderer.dispose(); return null; }
       return new GpuChecks(renderer);
     } catch (e) {
+      try { renderer?.dispose(); } catch { /* partial init */ }
       console.warn('WebGPU unavailable for print checks', e);
       return null;
     }
@@ -40,7 +42,7 @@ export class GpuChecks {
   private bvh(s: Soup): BVHComputeData {
     let d = this.bvhs.get(s.id);
     if (!d) {
-      const g = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(s.tris, 3));
+      const g = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(queryTris(s), 3));
       d = new BVHComputeData(new THREE.Mesh(g), { attributes: { position: 'vec4f' } });
       d.update();
       this.bvhs.set(s.id, d);
@@ -54,16 +56,25 @@ export class GpuChecks {
     this.bvhs.delete(id);
   }
 
+  /** False when the sample buffers would exceed the device's storage-binding limit (or its BVH is too big). */
+  fits(sampleCount: number): boolean {
+    const limit = (this.renderer.backend as any).device?.limits?.maxStorageBufferBindingSize ?? 128 * 1024 * 1024;
+    return sampleCount * 16 <= limit;
+  }
+
   private async run(n: number, inputs: Buf[], kernel: (out: any) => any): Promise<Float32Array> {
     const out = buf(new Float32Array(n), 1, 'float');
-    const k = kernel(out.node).compute(n);
-    await this.renderer.computeAsync(k);
-    const ab = await this.renderer.getArrayBufferAsync(out.attr);
-    const res = new Float32Array(ab.slice(0, n * 4));
+    let k: any;
     const backend = this.renderer.backend as unknown as { destroyAttribute?: (a: unknown) => void };
-    k.dispose?.();
-    for (const b of [out, ...inputs]) backend.destroyAttribute?.(b.attr);
-    return res;
+    try {
+      k = kernel(out.node).compute(n);
+      await this.renderer.computeAsync(k);
+      const ab = await this.renderer.getArrayBufferAsync(out.attr);
+      return new Float32Array(ab.slice(0, n * 4));
+    } finally {
+      try { k?.dispose?.(); } catch { /* already gone */ }
+      for (const b of [out, ...inputs]) { try { backend.destroyAttribute?.(b.attr); } catch { /* already gone */ } }
+    }
   }
 
   wall(s: Soup): Promise<Float32Array> {

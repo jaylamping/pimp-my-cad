@@ -1,11 +1,13 @@
 import * as THREE from 'three';
-import { buildSoup, type Soup } from './soup';
+import { buildSoup, sources, queryTris, type Soup } from './soup';
 import * as cpu from './cpu';
 import { colour, legend, thresholds, type Check } from './colors';
 import type { GpuChecks } from './gpu';
 import type { Viewer } from '../viewer';
 
 export { thresholds, legend, type Check };
+
+export class CancelledError extends Error { constructor() { super('cancelled'); } }
 
 export type Report = { ms: number; samples: number; engine: 'webgpu' | 'cpu'; outliers: number; text: string };
 
@@ -20,19 +22,25 @@ export class PrintChecks {
   private cache = new Map<Check, { soupId: number; values: Float32Array }>();
   private soup: Soup | null = null;
   active: Check | null = null;
+  /** Bumped by anything that invalidates in-flight runs (new run, clear, reset, baseline change). */
+  private gen = 0;
   onBaseline: (label: string | null) => void = () => {};
 
   constructor(private viewer: Viewer) {}
 
   /** The model was replaced: drop everything tied to the old meshes (keeps the baseline). */
-  reset() { this.soup = null; this.cache.clear(); this.active = null; }
+  reset() { this.gen++; this.soup = null; this.cache.clear(); this.active = null; }
 
   hasBaseline() { return !!this.baseline; }
 
   /** Snapshot of the current model as "the older revision" the distance check compares against. */
-  captureBaseline(label = 'current model') {
+  captureBaseline(label = 'current model', includeHidden = false) {
+    const soup = buildSoup(this.viewer.meshes, this.viewer.frameOffset(), includeHidden);
+    if (!queryTris(soup).length) throw new Error('Nothing to use as a baseline (no visible triangles)');
     if (this.baseline) this.gpu?.forget(this.baseline.id);
-    this.baseline = buildSoup(this.viewer.meshes, this.viewer.frameOffset());
+    soup.ranges = []; // numbers only: don't keep the old meshes alive
+    this.baseline = soup;
+    this.gen++;
     this.cache.delete('distance');
     this.onBaseline(label);
   }
@@ -46,28 +54,42 @@ export class PrintChecks {
 
   async run(kind: Check, progress?: (f: number) => void): Promise<Report> {
     const t0 = performance.now();
-    const soup = (this.soup = buildSoup(this.viewer.meshes, this.viewer.frameOffset()));
-    if (!soup.sampleCount) throw new Error('Nothing visible to check');
+    const my = ++this.gen;
+    const stale = () => { if (my !== this.gen) throw new CancelledError(); };
+    const soup = buildSoup(this.viewer.meshes, this.viewer.frameOffset());
+    if (!queryTris(soup).length) throw new Error('Nothing visible to check');
+    const baseline = this.baseline;
+    const prog = progress && ((f: number) => { if (my === this.gen) progress(f); });
     let engine: Report['engine'] = 'cpu';
     let values: Float32Array;
     let outliers = 0;
     if (kind === 'overhang') values = cpu.overhang(soup);
     else {
       if (kind === 'distance' && !this.baseline) throw new Error('Set a baseline revision first');
-      const gpu = await this.engine();
-      engine = gpu ? 'webgpu' : 'cpu';
-      if (kind === 'wall') {
-        values = gpu ? await gpu.wall(soup) : await cpu.wall(soup, cpu.bvhFor(soup), progress);
-        outliers = cpu.filterWallOutliers(values);
-      } else {
-        values = gpu ? await gpu.distance(soup, this.baseline!) : await cpu.distance(soup, cpu.bvhFor(this.baseline!), progress);
+      let gpu = await this.engine();
+      stale();
+      if (gpu && !gpu.fits(soup.sampleCount)) gpu = null; // too big for one storage binding: CPU
+      let res: Float32Array | null = null;
+      if (gpu) {
+        try {
+          res = kind === 'wall' ? await gpu.wall(soup) : await gpu.distance(soup, baseline!);
+          engine = 'webgpu';
+        } catch (e) { console.warn('GPU check failed, using CPU', e); }
+        if (kind === 'wall') gpu.forget(soup.id); // per-run BVH; the baseline's is kept until replaced
       }
+      stale();
+      if (!res) res = kind === 'wall' ? await cpu.wall(soup, cpu.bvhFor(soup), prog) : await cpu.distance(soup, cpu.bvhFor(baseline!), prog);
+      values = res;
+      if (kind === 'wall') outliers = cpu.filterWallOutliers(values);
       // degenerate triangles get a neutral value
       for (let t = 0; t < soup.triCount; t++) if (!soup.valid[t]) values.fill(kind === 'wall' ? cpu.WALL_MAX : 0, t * 3, t * 3 + 3);
     }
+    stale();
+    this.soup = soup;
     this.cache.set(kind, { soupId: soup.id, values });
+    this.clear(); // restore meshes the previous overlay painted (e.g. ones hidden since)
     this.active = kind;
-    this.paint(kind, values);
+    this.paint(soup, kind, values);
     const ms = Math.round(performance.now() - t0);
     const text = `${kind === 'overhang' ? 'Overhang' : kind === 'wall' ? 'Wall thickness' : 'Distance'}: ${soup.sampleCount.toLocaleString("en-US")} samples · ${engine === 'webgpu' ? 'GPU' : 'CPU'} · ${ms} ms`
       + (outliers ? ` · ${outliers} outlier${outliers > 1 ? 's' : ''} filtered` : '');
@@ -77,18 +99,17 @@ export class PrintChecks {
   /** Re-colour with the current thresholds, without recomputing. */
   repaint() {
     const c = this.active && this.cache.get(this.active);
-    if (c && this.active) this.paint(this.active, c.values);
+    if (c && this.active && this.soup) this.paint(this.soup, this.active, c.values);
   }
 
-  private paint(kind: Check, values: Float32Array) {
-    const soup = this.soup!;
+  private paint(soup: Soup, kind: Check, values: Float32Array) {
     const c = new THREE.Color();
     for (const r of soup.ranges) {
       const m = r.mesh;
-      if (!m.userData.checkSource) {
+      if (!sources.has(m)) {
         // per-instance, non-indexed copy so shared geometry can hold different colours
         const src = m.geometry;
-        m.userData.checkSource = src;
+        sources.set(m, src);
         const g = src.index ? src.toNonIndexed() : src.clone();
         g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(g.getAttribute('position').count * 3), 3));
         m.geometry = g;
@@ -107,12 +128,13 @@ export class PrintChecks {
 
   /** Back to the normal part colours. */
   clear() {
+    this.gen++;
     for (const m of this.viewer.meshes) {
-      const src = m.userData.checkSource as THREE.BufferGeometry | undefined;
+      const src = sources.get(m);
       if (!src) continue;
       m.geometry.dispose();
       m.geometry = src;
-      delete m.userData.checkSource;
+      sources.delete(m);
       const mat = m.material as THREE.MeshStandardMaterial;
       mat.vertexColors = false; mat.color.setHex(m.userData.baseColor); mat.needsUpdate = true;
     }
