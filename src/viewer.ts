@@ -124,6 +124,9 @@ export class Viewer {
     this.fit();
   }
 
+  /** Offset the viewer applies to seat the model on the grid; print checks subtract it. */
+  frameOffset(): THREE.Vector3 { return this.pivot.position.clone(); }
+
   private bbox() { return new THREE.Box3().setFromObject(this.pivot); }
 
   fit(dir = new THREE.Vector3(1, 0.8, 1.1)) {

@@ -2,10 +2,12 @@ import * as THREE from 'three';
 import { Viewer, Hit, Mode } from './viewer';
 import { loadModel, sha256, setNativeStepConverter } from './loaders';
 import * as desktop from './desktop';
+import { PrintChecks, thresholds, legend, type Check } from './checks';
 import { LocalStore, CommentStore, ReviewDoc, ReviewComment, Severity, newId } from './comments';
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector(s) as T;
 const viewer = new Viewer($('#view'));
+const checks = new PrintChecks(viewer);
 const store: CommentStore = desktop.isDesktop ? new desktop.SidecarStore() : new LocalStore();
 
 type LibItem = { title: string; path: string; url: string };
@@ -29,7 +31,13 @@ async function open(buf: ArrayBuffer, path: string, title = path.split(/[\\/]/).
   catch (e) { status(`${title}: ${(e as Error).message}`); return; }
   const { root, upAxis, rev, note } = loaded;
   const sha = rev ?? await sha256(buf).catch(() => 'unhashed');
+  // Live reload of the same file: the model on screen becomes the baseline the new one is compared to.
+  if (current?.path === path && viewer.model) checks.captureBaseline(`previous revision (${current.sha.slice(0, 8)})`);
   viewer.setModel(root, upAxis);
+  checks.reset();
+  kindSel.value = '';
+  $('#chk-msg').textContent = '';
+  syncChecks();
   if (desktop.isDesktop) desktop.setCurrentPath(path);
   const doc = await store.load(path);
   current = { path, title, sha, doc };
@@ -342,3 +350,37 @@ document.addEventListener('keydown', (e) => {
 });
 
 initLibrary();
+
+// ---------- print checks ----------
+const kindSel = $<HTMLSelectElement>('#chk-kind');
+function syncChecks() {
+  const k = kindSel.value as Check | '';
+  for (const c of ['overhang', 'wall', 'distance']) $(`#chk-th-${c}`).hidden = c !== k;
+  const lg = $('#chk-legend');
+  lg.hidden = !k;
+  if (k) {
+    const l = legend(k);
+    (lg.querySelector('.bar') as HTMLElement).style.background = l.gradient;
+    lg.querySelector('.ticks')!.innerHTML = l.ticks.map((t) => `<span>${esc(t)}</span>`).join('');
+  }
+}
+async function runCheck() {
+  const k = kindSel.value as Check | '';
+  if (!k) { checks.clear(); $('#chk-msg').textContent = ''; return syncChecks(); }
+  syncChecks();
+  $('#chk-msg').textContent = 'Computing…';
+  try {
+    $('#chk-msg').textContent = (await checks.run(k, (f) => ($('#chk-msg').textContent = `Computing… ${Math.round(f * 100)}%`))).text;
+  } catch (e) { $('#chk-msg').textContent = (e as Error).message; }
+}
+checks.onBaseline = (l) => ($('#chk-base-info').textContent = l ? `Baseline: ${l}` : '');
+kindSel.onchange = runCheck;
+$('#chk-run').onclick = runCheck;
+$('#chk-base').onclick = () => { checks.captureBaseline(`${current?.title ?? 'model'} at ${new Date().toLocaleTimeString()}`); };
+const bindTh = (id: string, set: (v: number) => void) => {
+  $<HTMLInputElement>(id).onchange = (e) => { const v = +(e.target as HTMLInputElement).value; if (v > 0) { set(v); syncChecks(); checks.repaint(); } };
+};
+bindTh('#th-overhang', (v) => (thresholds.overhang = v));
+bindTh('#th-wall', (v) => (thresholds.thinWall = v));
+bindTh('#th-dist', (v) => (thresholds.distRange = v));
+(window as any).pmcChecks = checks; // for agents / debugging, next to the planned window.pmc
