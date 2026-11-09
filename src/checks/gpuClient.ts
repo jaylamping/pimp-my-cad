@@ -20,7 +20,7 @@ export class GpuClient {
       this.pending.delete(m.req);
       if (m.op === 'done') p.resolve(m.out); else p.reject(new Error(m.message));
     };
-    worker.onerror = (e) => this.fail(new Error(e.message || 'GPU worker crashed'));
+    worker.onerror = (e) => { console.warn('GPU worker error', e.message); this.fail(new Error(e.message || 'GPU worker crashed')); };
   }
 
   /** Null when the webview has no usable WebGPU (in a worker or otherwise). */
@@ -31,7 +31,7 @@ export class GpuClient {
     catch (e) { console.warn('GPU worker unavailable', e); return null; }
     const res = await new Promise<{ ok: boolean; maxBinding: number }>((resolve) => {
       worker.onmessage = (e: MessageEvent<GpuResponse>) => e.data.op === 'init' && resolve(e.data);
-      worker.onerror = () => resolve({ ok: false, maxBinding: 0 });
+      worker.onerror = (e) => { console.warn('GPU worker failed to start', e.message); resolve({ ok: false, maxBinding: 0 }); };
       worker.postMessage({ op: 'init' } satisfies GpuRequest);
     });
     if (!res.ok) { worker.terminate(); return null; }
@@ -40,6 +40,7 @@ export class GpuClient {
 
   private fail(err: Error) {
     this.alive = false;
+    this.worker.terminate();
     for (const p of this.pending.values()) p.reject(err);
     this.pending.clear();
   }
@@ -64,6 +65,11 @@ export class GpuClient {
     const res = this.call((req) => ({ op: 'distance', req, soup: soupData(s), baseline: first ? soupData(baseline) : null, baselineId: baseline.id }));
     res.catch(() => this.sentBaselines.delete(baseline.id)); // not accepted: send it again next time
     return res;
+  }
+
+  /** Jobs sent before now that have not started are skipped by the worker. */
+  cancelPending() {
+    this.worker.postMessage({ op: 'cancelBefore', req: this.nextReq } satisfies GpuRequest);
   }
 
   /** Drops a baseline that was replaced. */

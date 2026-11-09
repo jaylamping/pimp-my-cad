@@ -19,6 +19,7 @@ export type Report = { ms: number; samples: number; engine: 'webgpu' | 'cpu'; ou
  */
 export class PrintChecks {
   private gpu: GpuClient | null | undefined; // undefined = not tried yet
+  private gpuInit: Promise<GpuClient | null> | null = null;
   private baseline: Soup | null = null;
   private cache = new Map<Check, { soupId: number; values: Float32Array }>();
   private soup: Soup | null = null;
@@ -53,7 +54,9 @@ export class PrintChecks {
   private async engine(): Promise<GpuClient | null> {
     if (this.gpu && !this.gpu.alive) this.gpu = null; // worker crashed: CPU from now on
     if (this.gpu === undefined) {
-      try { this.gpu = await (await import('./gpuClient')).GpuClient.create(); } catch (e) { console.warn(e); this.gpu = null; }
+      // one init shared by overlapping runs, so a second run can't spawn (and leak) a second worker
+      this.gpuInit ??= import('./gpuClient').then((m) => m.GpuClient.create()).catch((e) => { console.warn(e); return null; });
+      this.gpu = await this.gpuInit;
     }
     return this.gpu;
   }
@@ -61,6 +64,7 @@ export class PrintChecks {
   async run(kind: Check, progress?: (f: number) => void): Promise<Report> {
     const t0 = performance.now();
     const my = ++this.gen;
+    this.gpu?.cancelPending(); // queued jobs of superseded runs must not delay this one
     const stale = () => { if (my !== this.gen) throw new CancelledError(); };
     const soup = buildSoup(this.viewer.meshes, this.viewer.frameOffset());
     if (!queryTris(soup).length) throw new Error('Nothing visible to check');
@@ -176,7 +180,10 @@ export class PrintChecks {
     proxy.userData.printCheckProxy = true;
     im.add(proxy);
     // Hide the real instances by swapping in an invisible material: the original may be shared with other meshes.
-    im.material = new THREE.MeshBasicMaterial({ visible: false });
+    // A clone keeps emissive/side, which select() and picking still use on this mesh.
+    const hidden = base.clone();
+    hidden.visible = false;
+    im.material = hidden;
     this.proxies.set(im, { proxy, material: original, count: im.count });
     return proxy;
   }

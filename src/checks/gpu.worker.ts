@@ -8,7 +8,8 @@ export type GpuRequest =
   | { op: 'init' }
   | { op: 'wall'; req: number; soup: SoupData }
   | { op: 'distance'; req: number; soup: SoupData; baseline: SoupData | null; baselineId: number }
-  | { op: 'forget'; id: number };
+  | { op: 'forget'; id: number }
+  | { op: 'cancelBefore'; req: number };
 export type GpuResponse =
   | { op: 'init'; ok: boolean; maxBinding: number }
   | { op: 'done'; req: number; out: Float32Array }
@@ -18,6 +19,7 @@ const ctx = self as unknown as DedicatedWorkerGlobalScope;
 let gpu: GpuChecks | null = null;
 /** Baselines arrive once and are kept until forgotten, so re-runs don't re-upload them. */
 const baselines = new Map<number, SoupData>();
+let cancelBefore = 0; // queued jobs with a lower req were superseded
 let queue: Promise<unknown> = Promise.resolve(); // one job at a time: they share one device
 
 ctx.onmessage = (e: MessageEvent<GpuRequest>) => {
@@ -27,23 +29,27 @@ ctx.onmessage = (e: MessageEvent<GpuRequest>) => {
       gpu = g;
       ctx.postMessage({ op: 'init', ok: !!g, maxBinding: g?.maxBinding ?? 0 } satisfies GpuResponse);
     }).catch(() => ctx.postMessage({ op: 'init', ok: false, maxBinding: 0 } satisfies GpuResponse));
+  } else if (m.op === 'cancelBefore') {
+    cancelBefore = Math.max(cancelBefore, m.req);
   } else if (m.op === 'forget') {
-    baselines.delete(m.id);
-    queue = queue.then(() => gpu?.forget(m.id)).catch(() => {});
+    // in queue order, so a job queued before this still finds the baseline it needs
+    queue = queue.then(() => { baselines.delete(m.id); gpu?.forget(m.id); }).catch(() => {});
   } else {
     queue = queue.then(async () => {
       try {
+        if (m.req < cancelBefore) throw new Error('cancelled');
         if (!gpu) throw new Error('GPU not initialised');
         let out: Float32Array;
-        if (m.op === 'wall') {
-          out = await gpu.wall(m.soup);
-          gpu.forget(m.soup.id); // per-run BVH
-        } else {
-          if (m.baseline) baselines.set(m.baselineId, m.baseline);
-          const b = baselines.get(m.baselineId);
-          if (!b) throw new Error('baseline missing in GPU worker');
-          out = await gpu.distance(m.soup, b);
-          gpu.forget(m.soup.id);
+        try {
+          if (m.op === 'wall') out = await gpu.wall(m.soup);
+          else {
+            if (m.baseline) baselines.set(m.baselineId, m.baseline);
+            const b = baselines.get(m.baselineId);
+            if (!b) throw new Error('baseline missing in GPU worker');
+            out = await gpu.distance(m.soup, b);
+          }
+        } finally {
+          gpu.forget(m.soup.id); // per-run BVH, even when the job failed
         }
         ctx.postMessage({ op: 'done', req: m.req, out } satisfies GpuResponse, [out.buffer]);
       } catch (err) {
