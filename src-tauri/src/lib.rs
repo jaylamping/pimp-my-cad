@@ -103,6 +103,11 @@ async fn convert_step(app: AppHandle, path: String) -> Res<Response> {
             fs::create_dir_all(&dir).map_err(err)?;
             let src = dir.join(Path::new(&path).file_name().unwrap());
             fs::write(&src, &bytes).map_err(err)?;
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: no console flash from the bundled exe
+            }
             let o = cmd.arg(&src).arg("-o").arg(&out).arg("--tree").arg("--quiet").output()
                 .map_err(|e| format!("could not start the STEP converter: {e}. Install Python 3 and `pip install -r tools/step2glb/requirements.txt`, or set TANDEMCAD_PYTHON."))?;
             if !o.status.success() { return Err(String::from_utf8_lossy(&o.stderr).trim().to_string()); }
