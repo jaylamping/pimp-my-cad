@@ -56,4 +56,4 @@ jobs:
       # tauri-build wants frontendDist to exist
       - run: npm ci
       - run: npm run build
-      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings

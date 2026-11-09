@@ -8,13 +8,15 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -30,10 +32,22 @@ jobs:
           workspaces: src-tauri
 
       - name: Freeze the STEP converter (PyInstaller)
+        shell: bash
         run: |
+          set -e
           pip install -r tools/step2glb/requirements.txt pyinstaller
           python tools/step2glb/test_step2glb.py
           python tools/step2glb/build_sidecar.py
+
+      - name: Smoke-test the frozen converter
+        shell: bash
+        run: |
+          set -e
+          cd tools/step2glb
+          python -c "import test_step2glb as t; t.make_step('smoke.step')"
+          exe=$(ls ../../src-tauri/binaries/step2glb-*.exe | head -n1)
+          "$exe" smoke.step -o smoke.glb --tree --quiet
+          head -c 4 smoke.glb | grep -q glTF
 
       - run: npm ci
       - name: Build installer
@@ -45,11 +59,21 @@ jobs:
           path: src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
 
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: TandemCAD-windows-installer
       - name: Attach to draft release
-        if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         env:
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --draft --title "TandemCAD $GITHUB_REF_NAME" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" src-tauri/target/release/bundle/nsis/*.exe --clobber
+          gh release upload "$GITHUB_REF_NAME" ./*.exe --clobber
