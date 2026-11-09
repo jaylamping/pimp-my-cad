@@ -18,7 +18,7 @@ TandemCAD is a local desktop app. Decisions (Joey, 2026-11-08): Tauri shell, fil
 npm install
 pip install -r tools/step2glb/requirements.txt
 npm run desktop        # tauri dev
-npm run tauri build    # installer
+npm run tauri build    # dev installer, no bundled converter (see CI and the Windows installer for the real one)
 ```
 
 Needs Rust and the Tauri prerequisites (WebView2 on Windows, Xcode tools on macOS). Before the first build run `npm run tauri icon <1024px.png>` to generate `src-tauri/icons/`.
@@ -26,7 +26,14 @@ Needs Rust and the Tauri prerequisites (WebView2 on Windows, Xcode tools on macO
 ## Not done yet
 
 - This scaffold has not been compiled or run: the sandbox it was written in has no WebKitGTK. First step on your PC: `npm run desktop`.
-- PyInstaller build of the sidecar and CI (Windows x64, macOS arm64).
+- macOS arm64 build of the sidecar and installer (Windows x64 is built by CI).
 - Pin re-mapping across revisions and ghost compare of the previous revision after a live reload.
 - Agent guide + MCP server over the sidecar files. Sidecar file format is the contract; the MCP server will mainly serve instructions on how to read and reply to it.
 - Live loop with Fusion / SolidWorks: the app only sees what is exported, so an agent or macro has to re-export STEP/STL/3MF after each change. SolidWorks native files cannot be read without SolidWorks.
+
+## CI and the Windows installer
+
+- `.github/workflows/ci.yml` runs on every PR and push to `main`: frontend typecheck + build, the step2glb tests, and `cargo clippy` for the Tauri shell (on Windows).
+- `.github/workflows/release.yml` builds the installer. Run it by hand from the Actions tab for a downloadable artifact, or push a `v*` tag to also attach it to a draft GitHub release.
+- The installer bundles the converter as a PyInstaller exe, so users do not need Python. To build it locally: `pip install -r tools/step2glb/requirements.txt pyinstaller`, `python tools/step2glb/build_sidecar.py`, then `npm run tauri -- build --config src-tauri/tauri.release.conf.json`. The sidecar is only declared in `tauri.release.conf.json`, so `npm run desktop` keeps using your system Python.
+- The installer is unsigned, so Windows SmartScreen will warn on first run.
