@@ -9,6 +9,7 @@ export class GpuClient {
   private pending = new Map<number, { resolve: (v: Float32Array) => void; reject: (e: Error) => void }>();
   private nextReq = 1;
   private sentBaselines = new Set<number>();
+  alive = true;
 
   private constructor(private worker: Worker, private maxBinding: number) {
     worker.onmessage = (e: MessageEvent<GpuResponse>) => {
@@ -38,6 +39,7 @@ export class GpuClient {
   }
 
   private fail(err: Error) {
+    this.alive = false;
     for (const p of this.pending.values()) p.reject(err);
     this.pending.clear();
   }
@@ -59,7 +61,9 @@ export class GpuClient {
   distance(s: Soup, baseline: Soup) {
     const first = !this.sentBaselines.has(baseline.id);
     this.sentBaselines.add(baseline.id);
-    return this.call((req) => ({ op: 'distance', req, soup: soupData(s), baseline: first ? soupData(baseline) : null, baselineId: baseline.id }));
+    const res = this.call((req) => ({ op: 'distance', req, soup: soupData(s), baseline: first ? soupData(baseline) : null, baselineId: baseline.id }));
+    res.catch(() => this.sentBaselines.delete(baseline.id)); // not accepted: send it again next time
+    return res;
   }
 
   /** Drops a baseline that was replaced. */

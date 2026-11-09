@@ -27,13 +27,13 @@ export class PrintChecks {
   private gen = 0;
   private cpuRunner = new CpuRunner();
   /** Instanced meshes can't hold per-instance vertex colours, so each gets a baked child mesh while an overlay is shown. */
-  private proxies = new Map<THREE.InstancedMesh, THREE.Mesh>();
+  private proxies = new Map<THREE.InstancedMesh, { proxy: THREE.Mesh; material: THREE.Material | THREE.Material[]; count: number }>();
   onBaseline: (label: string | null) => void = () => {};
 
   constructor(private viewer: Viewer) {}
 
   /** The model was replaced: drop everything tied to the old meshes (keeps the baseline). */
-  reset() { this.gen++; this.cpuRunner.cancel(); this.soup = null; this.cache.clear(); this.active = null; }
+  reset() { this.dropProxies(); this.gen++; this.cpuRunner.cancel(); this.soup = null; this.cache.clear(); this.active = null; }
 
   hasBaseline() { return !!this.baseline; }
 
@@ -51,6 +51,7 @@ export class PrintChecks {
   }
 
   private async engine(): Promise<GpuClient | null> {
+    if (this.gpu && !this.gpu.alive) this.gpu = null; // worker crashed: CPU from now on
     if (this.gpu === undefined) {
       try { this.gpu = await (await import('./gpuClient')).GpuClient.create(); } catch (e) { console.warn(e); this.gpu = null; }
     }
@@ -145,8 +146,9 @@ export class PrintChecks {
 
   /** Child mesh with every instance baked in (mesh-local space), plus a colour attribute. */
   private proxyFor(im: THREE.InstancedMesh): THREE.Mesh {
-    let proxy = this.proxies.get(im);
-    if (proxy) return proxy;
+    const old = this.proxies.get(im);
+    if (old && old.count === im.count) return old.proxy;
+    if (old) this.dropProxies();
     const src = im.geometry;
     const pos = src.getAttribute('position');
     const idx = src.index;
@@ -164,30 +166,37 @@ export class PrintChecks {
     g.setAttribute('position', new THREE.BufferAttribute(out, 3));
     g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(out.length), 3));
     g.computeVertexNormals(); // non-indexed: flat shading, like the other overlays
-    const base = im.material as THREE.MeshStandardMaterial;
+    const original = im.material;
+    const base = original as THREE.MeshStandardMaterial;
     const mat = base.clone();
     mat.clippingPlanes = base.clippingPlanes; // clone() copies the planes; the section tool mutates the originals
     mat.vertexColors = true; mat.color.setRGB(1, 1, 1);
-    proxy = new THREE.Mesh(g, mat);
+    const proxy = new THREE.Mesh(g, mat);
     proxy.matrixAutoUpdate = false;
     proxy.userData.printCheckProxy = true;
     im.add(proxy);
-    base.visible = false; // hide the real instances; the baked copy draws in their place
-    this.proxies.set(im, proxy);
+    // Hide the real instances by swapping in an invisible material: the original may be shared with other meshes.
+    im.material = new THREE.MeshBasicMaterial({ visible: false });
+    this.proxies.set(im, { proxy, material: original, count: im.count });
     return proxy;
+  }
+
+  private dropProxies() {
+    for (const [im, { proxy, material }] of this.proxies) {
+      im.remove(proxy);
+      proxy.geometry.dispose();
+      (proxy.material as THREE.Material).dispose();
+      (im.material as THREE.Material).dispose();
+      im.material = material;
+    }
+    this.proxies.clear();
   }
 
   /** Back to the normal part colours. */
   clear() {
     this.gen++;
     this.cpuRunner.cancel();
-    for (const [im, proxy] of this.proxies) {
-      im.remove(proxy);
-      proxy.geometry.dispose();
-      (proxy.material as THREE.Material).dispose();
-      (im.material as THREE.Material).visible = true;
-    }
-    this.proxies.clear();
+    this.dropProxies();
     for (const m of this.viewer.meshes) {
       const src = sources.get(m);
       if (!src) continue;

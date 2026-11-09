@@ -26,10 +26,10 @@ ctx.onmessage = (e: MessageEvent<GpuRequest>) => {
     GpuChecks.create().then((g) => {
       gpu = g;
       ctx.postMessage({ op: 'init', ok: !!g, maxBinding: g?.maxBinding ?? 0 } satisfies GpuResponse);
-    });
+    }).catch(() => ctx.postMessage({ op: 'init', ok: false, maxBinding: 0 } satisfies GpuResponse));
   } else if (m.op === 'forget') {
     baselines.delete(m.id);
-    queue = queue.then(() => gpu?.forget(m.id));
+    queue = queue.then(() => gpu?.forget(m.id)).catch(() => {});
   } else {
     queue = queue.then(async () => {
       try {
