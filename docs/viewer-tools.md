@@ -15,5 +15,5 @@ All three work in millimetres and in the CAD frame (Z-up files are turned uprigh
 ## Measure (key `M`)
 - **Distance**: tap two points. Taps snap to a nearby triangle corner (within 14 px). The label shows the distance and ΔX/ΔY/ΔZ.
 - **Face angle**: tap two faces. Shows the angle between them, or the gap in mm when they are parallel.
-- Measurements stay until **Clear** or Esc; `Z` / **Undo** removes the newest. They are anchored to the part, so they stay with it under Explode.
+- Measurements stay until **Clear**; `Z` / **Undo** removes the newest, and Esc or leaving measure mode drops a half-finished one. They are anchored to the part, so they stay with it under Explode.
 - Code: `src/measure.ts`. Snapping and picking live in `Viewer.raycast`.

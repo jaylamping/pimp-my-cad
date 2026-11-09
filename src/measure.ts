@@ -61,11 +61,13 @@ export class MeasureTool {
     if (k === this.kind) return;
     if (this.pending) this.undo();
     this.kind = k;
+    this.onResult(null);
   }
 
   /** Feed a tap. Returns true when it completed a measurement. */
   add(hit: Hit | null): boolean {
     if (!hit) return false;
+    hit.mesh.updateWorldMatrix(true, false);
     const an = this.anchor(hit);
     if (!this.pending) {
       this.pending = an;
@@ -76,9 +78,7 @@ export class MeasureTool {
       return false;
     }
     const a = this.pending;
-    this.group.remove(this.pendingDot!);
-    this.pendingDot = null;
-    this.pending = null;
+    this.dropPending();
     const dots = [this.dot(), this.dot()];
     const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
       new THREE.LineBasicMaterial({ color: COLOR, depthTest: false }));
@@ -96,8 +96,17 @@ export class MeasureTool {
     return true;
   }
 
+  private anchors() {
+    const out = new Set<THREE.Mesh>();
+    if (this.pending) out.add(this.pending.mesh);
+    for (const it of this.items) { out.add(it.a.mesh); out.add(it.b.mesh); }
+    return out;
+  }
+
   /** Re-seat every marker after parts moved. Cheap: a few vectors per measurement. */
   update() {
+    // The animation loop calls this before render(); bring matrices current so markers don't lag a frame.
+    if (this.pending || this.items.length) this.anchors().forEach((m) => m.updateWorldMatrix(true, false));
     if (this.pending && this.pendingDot) this.pendingDot.position.copy(this.world(this.pending));
     for (const it of this.items) {
       const a = this.world(it.a), b = this.world(it.b);
@@ -114,26 +123,50 @@ export class MeasureTool {
 
   /** Remove the newest measurement (or the half-finished one). */
   undo() {
-    if (this.pending) { this.group.remove(this.pendingDot!); this.pending = null; this.pendingDot = null; return; }
+    if (this.pending) {
+      this.dropPending();
+      this.onResult(null);
+      return;
+    }
     const it = this.items.pop();
     if (it) this.dispose(it);
+    const last = this.items[this.items.length - 1];
+    this.onResult(last ? last.label.element.textContent : null);
+  }
+
+  /** Forget a half-finished measurement (leaving measure mode, Esc, switching kind). */
+  cancelPending() {
+    if (!this.pending) return;
+    this.dropPending();
+    this.onResult(null);
+  }
+
+  private dropPending() {
+    if (this.pendingDot) this.disposeDot(this.pendingDot);
+    this.pending = null; this.pendingDot = null;
+  }
+
+  private disposeDot(d: THREE.Mesh) {
+    this.group.remove(d);
+    d.geometry.dispose();
+    (d.material as THREE.Material).dispose();
   }
 
   clear() {
-    this.pending = null; this.pendingDot = null;
+    this.dropPending();
     for (const it of this.items) this.dispose(it);
     this.items = [];
-    for (const c of [...this.group.children]) this.group.remove(c);
     this.onResult(null);
   }
 
   get count() { return this.items.length; }
 
   private dispose(it: Item) {
-    this.group.remove(it.line, it.label, ...it.dots);
+    this.group.remove(it.line, it.label);
     it.label.element.remove();
     it.line.geometry.dispose();
-    for (const d of it.dots) { d.geometry.dispose(); (d.material as THREE.Material).dispose(); }
+    (it.line.material as THREE.Material).dispose();
+    for (const d of it.dots) this.disposeDot(d);
   }
 }
 
