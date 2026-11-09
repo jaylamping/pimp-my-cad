@@ -33,7 +33,9 @@ pub fn review_path(file: &Path, loose_dir: &Path, loose_key: &str) -> PathBuf {
 fn legacy_path(file: &Path) -> PathBuf { PathBuf::from(format!("{}.tandem.json", file.display())) }
 
 pub fn read_review(file: &Path, loose_dir: &Path, loose_key: &str) -> io::Result<Option<String>> {
-    for p in [review_path(file, loose_dir, loose_key), legacy_path(file)] {
+    // A model that was outside any workspace and later gained one still finds its old review in the
+    // app data folder; the next save writes it into the workspace.
+    for p in [review_path(file, loose_dir, loose_key), loose_dir.join(format!("{loose_key}.json")), legacy_path(file)] {
         match fs::read_to_string(&p) {
             Ok(s) => return Ok(Some(s)),
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
@@ -80,17 +82,20 @@ pub fn list_reviews(file: &Path) -> io::Result<Vec<Entry>> {
     let mut out = vec![];
     let mut stack = vec![base.clone()];
     while let Some(d) = stack.pop() {
-        let rd = match fs::read_dir(&d) { Ok(r) => r, Err(_) => continue };
-        for e in rd.flatten() {
-            let p = e.path();
+        let rd = match fs::read_dir(&d) {
+            Ok(r) => r,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        for e in rd {
+            let p = e?.path();
             if p.is_dir() { stack.push(p); continue; }
             if p.extension().and_then(|x| x.to_str()) != Some("json") { continue; }
             let rel_json = rel_path(&base, &p).unwrap_or_default();
             let rel = rel_json.trim_end_matches(".json").to_string();
-            if let Ok(json) = fs::read_to_string(&p) {
-                let model_exists = root.join(&rel).exists();
-                out.push(Entry { rel, json, model_exists });
-            }
+            let json = fs::read_to_string(&p)?; // an unreadable review must not hide a relink candidate
+            let model_exists = root.join(&rel).exists();
+            out.push(Entry { rel, json, model_exists });
         }
     }
     out.sort_by(|a, b| a.rel.cmp(&b.rel));

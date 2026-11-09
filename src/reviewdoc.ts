@@ -60,12 +60,42 @@ export function emptyDoc(file: string): ReviewDoc {
   return { schema: 2, modelId: 'm' + newId(), file, revisions: [], version: 0, comments: [] };
 }
 
-/** Accept schema 1 (`{schema:1,file,comments}`) or 2 and return schema 2. */
+const SEVERITIES: Severity[] = ['blocker', 'major', 'minor', 'note'];
+const STATUSES: Status[] = ['open', 'claimed', 'proposed', 'suggested', 'fixed', 'wontfix'];
+const str = (v: unknown, d = '') => (typeof v === 'string' ? v : d);
+
+/** Make one comment safe to render: known severity/status, strings where strings are expected. */
+function cleanComment(c: any): ReviewComment | null {
+  if (!c || typeof c !== 'object' || typeof c.id !== 'string' || !c.id) return null;
+  const v = (x: unknown) => Array.isArray(x) && x.length === 3 && x.every((n) => typeof n === 'number' && isFinite(n));
+  const p = c.anchor && v(c.anchor.p) ? c.anchor.p : [0, 0, 0];
+  const n = c.anchor && v(c.anchor.n) ? c.anchor.n : [0, 0, 1];
+  return {
+    ...c,
+    part: str(c.part),
+    anchor: { p, n },
+    severity: SEVERITIES.includes(c.severity) ? c.severity : 'note',
+    status: STATUSES.includes(c.status) ? c.status : 'open',
+    text: str(c.text), author: str(c.author, 'unknown'),
+    created: str(c.created, new Date(0).toISOString()), rev: str(c.rev),
+  };
+}
+
+/** Accept schema 1 (`{schema:1,file,comments}`) or 2 and return a validated schema 2 doc. */
 export function upgradeDoc(raw: any, file: string): ReviewDoc {
+  const clean = (list: unknown) => (Array.isArray(list) ? list : []).map(cleanComment).filter((c): c is ReviewComment => !!c);
   if (raw && raw.schema === 2) {
-    return { ...raw, revisions: raw.revisions ?? [], version: raw.version ?? 0, comments: raw.comments ?? [] };
+    return {
+      ...raw,
+      modelId: str(raw.modelId) || 'm' + newId(),
+      file: str(raw.file, file),
+      revisions: (Array.isArray(raw.revisions) ? raw.revisions : []).filter((r: any) => r && typeof r.sha === 'string'),
+      version: Number.isFinite(raw.version) ? raw.version : 0,
+      deleted: Array.isArray(raw.deleted) ? raw.deleted.filter((x: unknown) => typeof x === 'string') : undefined,
+      comments: clean(raw.comments),
+    };
   }
-  const comments: ReviewComment[] = raw?.comments ?? [];
+  const comments: ReviewComment[] = clean(raw?.comments);
   const seen = new Map<string, RevisionRecord>();
   for (const c of comments) if (c.rev && !seen.has(c.rev)) seen.set(c.rev, { sha: c.rev, seen: c.created });
   return {
@@ -91,7 +121,12 @@ export function notePath(doc: ReviewDoc, file: string): boolean {
   return true;
 }
 
-const stamp = (c: ReviewComment) => c.updated ?? c.created;
+// Compare as times, not strings: offsets and missing milliseconds sort wrong as text.
+const time = (t: string) => { const n = Date.parse(t); return Number.isNaN(n) ? 0 : n; };
+/** Agents can claim/propose/suggest; those still need a person's decision, so only fixed/wontfix are closed. */
+export const isClosed = (c: Pick<ReviewComment, 'status'>) => c.status === 'fixed' || c.status === 'wontfix';
+
+const stamp = (c: ReviewComment) => time(c.updated ?? c.created);
 
 /** Union of two writers' views of the same model. The later `updated` wins per comment; ties keep `mine`. */
 export function mergeDocs(disk: ReviewDoc, mine: ReviewDoc): ReviewDoc {
@@ -113,7 +148,7 @@ export function mergeDocs(disk: ReviewDoc, mine: ReviewDoc): ReviewDoc {
     paths: paths.length ? paths : undefined,
     revisions,
     deleted: deleted.length ? deleted : undefined,
-    comments: [...byId.values()].sort((a, b) => (a.created < b.created ? -1 : a.created > b.created ? 1 : 0)),
+    comments: [...byId.values()].sort((a, b) => time(a.created) - time(b.created)),
   };
 }
 

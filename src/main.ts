@@ -3,7 +3,7 @@ import { Viewer, Hit, Mode, type ExplodeMode } from './viewer';
 import { loadModel, sha256, setNativeStepConverter } from './loaders';
 import * as desktop from './desktop';
 import { PrintChecks, CancelledError, thresholds, legend, type Check } from './checks';
-import { LocalStore, CommentStore, ReviewDoc, ReviewComment, Severity, newId, fingerprint } from './comments';
+import { LocalStore, CommentStore, ReviewDoc, ReviewComment, Severity, newId, fingerprint, mergeDocs, isClosed, upgradeDoc } from './comments';
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector(s) as T;
 const viewer = new Viewer($('#view'));
@@ -47,7 +47,6 @@ async function open(buf: ArrayBuffer, path: string, title = path.split(/[\\/]/).
   kindSel.value = '';
   $('#chk-msg').textContent = '';
   syncChecks();
-  if (desktop.isDesktop) desktop.setCurrentPath(path);
   const doc = await store.load(path, sha, buf.byteLength);
   current = { path, title, sha, doc };
   draft = null; activeId = null;
@@ -98,8 +97,9 @@ async function initLibrary() {
 async function openNative(path: string) {
   await open(await desktop.readFile(path), path);
   await desktop.watch(path);
+  reviewWatched = null;
 }
-let reviewSaved = false; // the review file may not exist until the first save, so watch again then
+let reviewWatched: string | null = null; // the review folder may not exist until the first save, so watch again then
 if (desktop.isDesktop) {
   setNativeStepConverter(desktop.convertStep);
   $('#file').addEventListener('click', async (e) => {
@@ -117,10 +117,16 @@ if (desktop.isDesktop) {
   });
   // An agent (or another window) edited the review file: pick up its changes.
   desktop.onReviewChanged(async (p) => {
-    if (current?.path !== p) return;
+    const cur = current;
+    if (cur?.path !== p) return;
     const disk = await (store as desktop.ReviewStore).peek(p);
-    if (!disk || disk.version === current.doc.version) return;
-    current.doc = await store.load(p, current.sha);
+    if (!disk || current !== cur) return; // the user opened another model while we were reading
+    // versions can tie while contents differ, so merge by comment id and compare contents
+    const merged = mergeDocs(disk, cur.doc);
+    const key = (d: ReviewDoc) => JSON.stringify([d.comments, d.deleted ?? []]);
+    if (key(merged) === key(cur.doc)) return;
+    Object.assign(cur.doc, merged);
+    buildTree();
     renderComments();
   });
 }
@@ -158,7 +164,7 @@ function buildTree() {
     const li = document.createElement('li');
     li.dataset.part = m.userData.part;
     const col = '#' + (m.userData.baseColor as number).toString(16).padStart(6, '0');
-    const n = current!.doc.comments.filter((c) => c.part === m.userData.part && c.status === 'open').length;
+    const n = current!.doc.comments.filter((c) => c.part === m.userData.part && !isClosed(c)).length;
     li.innerHTML = `<input type="checkbox" ${m.visible ? 'checked' : ''}/><span class="sw" style="background:${col}"></span>
       <span class="nm" title="${esc(m.userData.part)}">${esc(m.name)}</span>
       ${m.userData.kind === 'modifier' ? '<span class="mod">modifier</span>' : ''}${n ? `<span class="cnt">${n}</span>` : ''}`;
@@ -254,7 +260,7 @@ $<HTMLFormElement>('#composer').onsubmit = async (e) => {
   };
   current.doc.comments.push(c);
   await store.save(current.doc);
-  if (desktop.isDesktop && !reviewSaved) { reviewSaved = true; desktop.watch(current.path).catch(() => {}); }
+  if (desktop.isDesktop && reviewWatched !== current.path) { reviewWatched = current.path; desktop.watch(current.path).catch((err) => console.warn('could not watch the review file', err)); }
   hideComposer();
   activeId = c.id;
   buildTree();
@@ -282,12 +288,12 @@ function visibleComments(): ReviewComment[] {
   if (!current) return [];
   const f = $<HTMLSelectElement>('#filter').value;
   return current.doc.comments.filter((c) =>
-    f === 'all' ? true : f === 'part' ? c.part === viewer.selected?.userData.part : c.status === 'open');
+    f === 'all' ? true : f === 'part' ? c.part === viewer.selected?.userData.part : !isClosed(c));
 }
 function drawPins() {
   if (!current) return;
   current.doc.comments.forEach((c, i) => {
-    const cls = c.status === 'fixed' || c.status === 'wontfix' ? 'done' : c.severity;
+    const cls = isClosed(c) ? 'done' : c.severity;
     viewer.addPin(c.id, String(i + 1), c.part, c.anchor.p, cls, () => focusComment(c.id));
   });
   viewer.highlightPin(activeId);
@@ -300,14 +306,14 @@ function renderComments() {
   ol.innerHTML = '';
   if (!current) return;
   const all = current.doc.comments;
-  $('#open-count').textContent = String(all.filter((c) => c.status === 'open').length || '');
+  $('#open-count').textContent = String(all.filter((c) => !isClosed(c)).length || '');
   for (const c of visibleComments()) {
     const n = all.indexOf(c) + 1;
     const li = document.createElement('li');
-    li.className = `${c.severity} ${c.status === 'fixed' || c.status === 'wontfix' ? 'done' : ''} ${c.id === activeId ? 'active' : ''} ${c.rev !== current.sha ? 'stale' : ''}`;
+    li.className = `${esc(c.severity)} ${isClosed(c) ? 'done' : ''} ${c.id === activeId ? 'active' : ''} ${c.rev !== current.sha ? 'stale' : ''}`;
     const missing = !viewer.meshes.some((m) => m.userData.part === c.part);
-    li.innerHTML = `<div class="meta"><b>#${n}</b><span>${c.severity}</span><span>${esc(c.part.split('/').pop()!)}</span>
-        <span>${esc(c.author)}</span><span>${new Date(c.created).toLocaleString()}</span>${c.status !== 'open' ? `<span>${c.status}</span>` : ''}
+    li.innerHTML = `<div class="meta"><b>#${n}</b><span>${esc(c.severity)}</span><span>${esc(c.part.split('/').pop()!)}</span>
+        <span>${esc(c.author)}</span><span>${new Date(c.created).toLocaleString()}</span>${c.status !== 'open' ? `<span>${esc(c.status)}</span>` : ''}
         ${missing ? '<span style="color:var(--blocker)">part not in this file</span>' : ''}</div>
       <div class="txt">${esc(c.text)}</div>${c.fix ? `<div class="fix">${esc(c.fix)}</div>` : ''}
       ${c.resolved?.note ? `<div class="meta">Resolution: ${esc(c.resolved.note)}</div>` : ''}
@@ -370,7 +376,7 @@ $('#export').onclick = () => {
 $<HTMLInputElement>('#import').onchange = async (e) => {
   const f = (e.target as HTMLInputElement).files?.[0];
   if (!f || !current) return;
-  const doc = JSON.parse(await f.text()) as ReviewDoc;
+  const doc = upgradeDoc(JSON.parse(await f.text()), current.doc.file);
   const have = new Set(current.doc.comments.map((c) => c.id));
   const gone = new Set(current.doc.deleted ?? []);
   for (const c of doc.comments) if (!have.has(c.id) && !gone.has(c.id)) current.doc.comments.push(c);

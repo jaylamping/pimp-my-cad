@@ -7,10 +7,10 @@ TandemCAD is a local desktop app. Decisions (Joey, 2026-11-08): Tauri shell, fil
 | Piece | Where | Notes |
 | --- | --- | --- |
 | Viewer | `src/` | Same Three.js viewer; `src/desktop.ts` is the only Tauri-aware file. |
-| Native side | `src-tauri/src/lib.rs` | read file, review load/save/list, file + review watcher, STEP converter, file watcher. |
+| Native side | `src-tauri/src/lib.rs` | read file, review load/save/list, file + review watcher (`file-changed`, `review-changed`), STEP converter. |
 | STEP converter | `tools/step2glb/` | Run as a subprocess. Release builds bundle it as the `step2glb` sidecar (`src-tauri/binaries/step2glb-<target-triple>[.exe]`, built with PyInstaller). Dev falls back to `python tools/step2glb/step2glb.py` (`TANDEMCAD_PYTHON`, `TANDEMCAD_STEP2GLB` override). Results are cached in the app cache dir by STEP hash + converter version. |
 | Comments | `<workspace>/.tandemcad/reviews/<model path>.json` | Schema 2 `ReviewDoc` (`src/reviewdoc.ts`): model id, path history, per-revision hashes, agent fields (claim, thread, proposal, source). Workspace = nearest folder with `.tandemcad/` or `.git`; the folder gets a `.gitignore` (`*`) and an `AGENTS.md` guide on first write. Files outside a workspace keep reviews in the app data folder. Renames re-link by content hash. Old `<file>.tandem.json` is still read once. Atomic writes; app and agents merge by comment id. No database. |
-| Live reload | `watch_file` command | Watches the opened file's folder (CAD programs save by replacing the file), debounces 600 ms, emits `file-changed`; the viewer re-opens the file. Pins on the old revision show as "older rev" via the existing hash check. |
+| Live reload | `watch_file` command | Watches the opened file's folder (CAD programs save by replacing the file), debounces 600 ms, emits `file-changed`; the viewer re-opens the file. It also watches the review folder and emits `review-changed` when an agent edits the review. Pins on the old revision show as "older rev" via the existing hash check. |
 
 ## Run
 

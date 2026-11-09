@@ -37,3 +37,24 @@ test('noteRevision and notePath are idempotent and remember history', () => {
   assert.deepEqual(d.paths, ['a.stl']);
   assert.equal(notePath(d, 'b.stl'), false);
 });
+
+test('merge: equal versions with different contents still union; offsets compare as times', () => {
+  const disk = doc([c('a', '2026-01-01T10:00:00+02:00', { status: 'claimed' })], { version: 3 });
+  const mine = doc([c('a', '2026-01-01T09:00:00Z'), c('b', '2026-01-01T00:00:00Z')], { version: 3 });
+  const m = mergeDocs(disk, mine);
+  assert.deepEqual(m.comments.map((x) => x.id), ['a', 'b']);
+  assert.equal(m.comments[0].status, 'open'); // 09:00Z is later than 10:00+02:00 (= 08:00Z)
+});
+
+test('upgradeDoc drops junk and clamps severity/status', () => {
+  const d = upgradeDoc({ schema: 2, comments: [c('x', undefined, { severity: '<img onerror=1>', status: 'bogus' }), null, { nope: 1 }] }, 'a.stl');
+  assert.equal(d.comments.length, 1);
+  assert.equal(d.comments[0].severity, 'note');
+  assert.equal(d.comments[0].status, 'open');
+});
+
+test('tombstone-only docs survive and isClosed ignores agent statuses', async () => {
+  const { isClosed } = await import('../src/reviewdoc.ts');
+  assert.equal(isClosed({ status: 'claimed' }), false);
+  assert.equal(isClosed({ status: 'wontfix' }), true);
+});

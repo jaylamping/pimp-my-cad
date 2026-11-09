@@ -43,7 +43,7 @@ One document per reviewed file. `part` is the node path inside the file; `anchor
 }
 ```
 
-`status` is `open`, `fixed` or `wontfix`; closed comments carry `resolved: { by, at, rev, note }`.
+`status` is `open`, `claimed`, `proposed`, `suggested` (the last three are set by agents), `fixed` or `wontfix` (set by a person); closed comments carry `resolved: { by, at, rev, note }`.
 
 ## Develop
 

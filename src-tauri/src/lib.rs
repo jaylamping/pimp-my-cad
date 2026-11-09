@@ -3,7 +3,7 @@
 //
 // Comments live in `.tandemcad/reviews/<model path>.json` at the workspace root
 // (see reviews.rs; same schema as `ReviewDoc` in src/reviewdoc.ts), so agents
-// and git can read them directly.
+// can read them directly (the folder is gitignored by default).
 mod reviews;
 
 use serde::Serialize;

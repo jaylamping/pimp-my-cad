@@ -17,10 +17,11 @@ The comments live next to the models, in this folder, as plain JSON. You can rea
 - `version`: bumped on every write.
 - `deleted`: ids of deleted comments (do not bring them back).
 - `comments[]`, each with:
+  - Write times as UTC with a `Z` (`2026-11-09T12:00:00Z`); the later `updated` wins when two writers meet.
   - `id`, `part` (node path inside the model), `anchor` (`p` point and `n` normal in the part's local mm),
     `selectors` (extra ways to find the spot again), `severity` (blocker, major, minor, note),
     `text`, `fix` (suggested fix), `status`, `author`, `created`, `updated`, and `rev` (hash of the model
-    revision it was written against). If `rev` is not the latest entry in `revisions`, the model changed since;
+    revision it was written against). If `rev` differs from the sha256 of the model file as it is now, the model changed since;
     check the comment still applies.
 
 ## What you may do
