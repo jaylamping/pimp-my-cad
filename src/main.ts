@@ -185,6 +185,7 @@ function setMode(mode: Mode) {
   viewer.mode = mode;
   for (const b of Array.from(document.querySelectorAll<HTMLButtonElement>('#modes button'))) b.classList.toggle('on', b.dataset.mode === mode);
   $('#measure').hidden = mode !== 'measure';
+  if (mode !== 'measure') viewer.measure.cancelPending();
   status(mode === 'pin' ? 'Tap the spot you want to comment on' : mode === 'measure' ? 'Tap two points to measure (snaps to corners)' : fileStatus);
 }
 for (const b of Array.from(document.querySelectorAll<HTMLButtonElement>('#modes button'))) b.onclick = () => setMode(b.dataset.mode as Mode);
@@ -352,6 +353,7 @@ const explode = () => {
   const f = +$<HTMLInputElement>('#explode').value;
   viewer.setExplode(f, $<HTMLSelectElement>('#explode-mode').value as ExplodeMode);
   $('#explode-val').textContent = f ? `${Math.round(f * 100)}%` : '';
+  if ($<HTMLSelectElement>('#sec-axis').value) sec(); // the cut tracks the exploded extent
 };
 $('#explode').oninput = explode; $('#explode-mode').onchange = explode;
 const sec = () => {
@@ -371,9 +373,9 @@ document.addEventListener('keydown', (e) => {
   if (k === 's') setMode('select');
   if (k === 'c') setMode('pin');
   if (k === 'm') setMode('measure');
-  if (k === 'z' && viewer.mode === 'measure') viewer.measure.undo();
+  if (k === 'z' && viewer.mode === 'measure' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat) viewer.measure.undo();
   if (k === 'f') viewer.fit();
-  if (k === 'escape') { hideComposer(); viewer.clearMeasure(); setMode('select'); renderComments(); }
+  if (k === 'escape') { hideComposer(); setMode('select'); renderComments(); }
 });
 
 initLibrary();

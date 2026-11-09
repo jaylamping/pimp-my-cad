@@ -278,7 +278,7 @@ export class Viewer {
     const mesh = h.object as THREE.Mesh;
     const local = mesh.worldToLocal(h.point.clone());
     const normal = h.face ? h.face.normal.clone() : new THREE.Vector3(0, 0, 1);
-    return { mesh, part: mesh.userData.part, local, normal, world: h.point.clone(), snapped: this.snap(h, ndc) };
+    return { mesh, part: mesh.userData.part, local, normal, world: h.point.clone(), snapped: this.mode === 'measure' ? this.snap(h, ndc) : undefined };
   }
 
   /** Snap a tap to the nearest corner of the triangle it hit when that corner is within a fingertip. */
