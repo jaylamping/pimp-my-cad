@@ -3,9 +3,12 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { MeasureTool } from './measure';
 
 export type Mode = 'select' | 'pin' | 'measure';
-export type Hit = { mesh: THREE.Mesh; part: string; local: THREE.Vector3; normal: THREE.Vector3; world: THREE.Vector3 };
+export type Hit = { mesh: THREE.Mesh; part: string; local: THREE.Vector3; normal: THREE.Vector3; world: THREE.Vector3; snapped?: THREE.Vector3 };
+export type ExplodeMode = 'radial' | 'x' | 'y' | 'z';
+export type SectionInfo = { at: number; span: number } | null;
 
 const PALETTE = [0xd9d9d4, 0x4fb3bf, 0xf08c3a, 0x9b7fd1, 0x7fbf6a, 0xd9b44a, 0x5d8fd8, 0xd66a7e];
 
@@ -26,17 +29,20 @@ export class Viewer {
   mode: Mode = 'select';
   selected: THREE.Mesh | null = null;
   onPick: (h: Hit | null) => void = () => {};
-  onMeasure: (mm: number | null) => void = () => {};
+  /** Text of the newest measurement or a prompt for the next tap; null when cleared. */
+  onMeasure: (text: string | null) => void = () => {};
+  measure = new MeasureTool();
   private pivot = new THREE.Group(); // holds the model, rotated so CAD Z-up shows upright
-  private explodeBase = new Map<THREE.Object3D, { pos: THREE.Vector3; dir: THREE.Vector3 }>();
+  private explodeBase = new Map<THREE.Object3D, { pos: THREE.Vector3; dirs: Record<ExplodeMode, THREE.Vector3> }>();
+  private explodeMode: ExplodeMode = 'radial';
   private section = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
   private sectionOn = false;
-  private measurePts: THREE.Vector3[] = [];
-  private measureObj = new THREE.Group();
+  private sectionPlane: THREE.Group;
   private grid: THREE.GridHelper;
   size = 100;
 
   constructor(private el: HTMLElement) {
+    this.measure.onResult = (t) => this.onMeasure(t);
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.localClippingEnabled = true;
@@ -61,13 +67,15 @@ export class Viewer {
     this.controls.screenSpacePanning = true;
 
     this.grid = new THREE.GridHelper(400, 40, 0x3a4048, 0x2a2f35);
-    this.scene.add(this.grid, this.pivot, this.measureObj);
+    this.sectionPlane = this.makeSectionPlane();
+    this.scene.add(this.grid, this.pivot, this.measure.group, this.sectionPlane);
 
     new ResizeObserver(() => this.resize()).observe(el);
     this.resize();
     this.bindPointer();
     this.renderer.setAnimationLoop(() => {
       this.controls.update();
+      this.measure.update();
       this.renderer.render(this.scene, this.camera);
       this.labels.render(this.scene, this.camera);
     });
@@ -88,6 +96,7 @@ export class Viewer {
     this.model = root;
     this.pivot.rotation.set(upAxis === 'z' ? -Math.PI / 2 : 0, 0, 0);
     this.pivot.add(root);
+    this.measure.toCad.copy(this.pivot.quaternion).invert();
     this.meshes = [];
     let i = 0;
     const creased = new Map<THREE.BufferGeometry, THREE.BufferGeometry>();
@@ -122,6 +131,7 @@ export class Viewer {
     this.computeExplode();
     this.setSection(null, 0);
     this.fit();
+    this.measure.markerSize = this.size * 0.005;
   }
 
   /** Offset the viewer applies to seat the model on the grid; print checks subtract it. */
@@ -183,29 +193,64 @@ export class Viewer {
       for (const k of kids) visit(k);
     };
     visit(this.model);
+    const axes: Record<'x' | 'y' | 'z', THREE.Vector3> = {
+      x: new THREE.Vector3(1, 0, 0).applyQuaternion(this.pivot.quaternion),
+      y: new THREE.Vector3(0, 1, 0).applyQuaternion(this.pivot.quaternion),
+      z: new THREE.Vector3(0, 0, 1).applyQuaternion(this.pivot.quaternion),
+    };
     for (const { m, center } of movers) {
       const c = new THREE.Box3().setFromObject(m).getCenter(new THREE.Vector3());
-      const dirWorld = c.sub(center);
-      if (dirWorld.lengthSq() < 1e-6) dirWorld.set(0, 1, 0).multiplyScalar(0.001);
+      const offset = c.sub(center);
       const inv = new THREE.Matrix4().copy(m.parent!.matrixWorld).invert();
-      const dirLocal = dirWorld.clone().transformDirection(inv).multiplyScalar(dirWorld.length() / m.parent!.getWorldScale(new THREE.Vector3()).x);
-      this.explodeBase.set(m, { pos: m.position.clone(), dir: dirLocal });
+      const scale = m.parent!.getWorldScale(new THREE.Vector3()).x;
+      const toLocal = (w: THREE.Vector3) => w.clone().transformDirection(inv).multiplyScalar(w.length() / scale);
+      const radial = offset.clone();
+      if (radial.lengthSq() < 1e-6) radial.set(0, 1, 0).multiplyScalar(0.001);
+      // Axis modes spread parts along one CAD axis only, in proportion to where they sit on it
+      const along = (a: THREE.Vector3) => a.clone().multiplyScalar(offset.dot(a));
+      this.explodeBase.set(m, {
+        pos: m.position.clone(),
+        dirs: { radial: toLocal(radial), x: toLocal(along(axes.x)), y: toLocal(along(axes.y)), z: toLocal(along(axes.z)) },
+      });
     }
   }
 
-  setExplode(f: number) {
-    for (const [o, b] of this.explodeBase) o.position.copy(b.pos).addScaledVector(b.dir, f);
+  setExplode(f: number, mode: ExplodeMode = this.explodeMode) {
+    this.explodeMode = mode;
+    for (const [o, b] of this.explodeBase) o.position.copy(b.pos).addScaledVector(b.dirs[mode], f);
   }
 
   // ---------- section ----------
-  setSection(axis: 'x' | 'y' | 'z' | null, t: number, flip = false) {
+  /** Axes are CAD axes (the pivot turns Z-up files upright). Returns the cut position in mm from the model's low end. */
+  setSection(axis: 'x' | 'y' | 'z' | null, t: number, flip = false): SectionInfo {
     this.sectionOn = !!axis;
-    if (!axis) { this.section.set(new THREE.Vector3(0, -1, 0), 1e9); return; }
+    this.sectionPlane.visible = !!axis;
+    if (!axis) { this.section.set(new THREE.Vector3(0, -1, 0), 1e9); return null; }
     const box = this.bbox();
-    const n = new THREE.Vector3(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0).multiplyScalar(flip ? 1 : -1);
-    const lo = box.min[axis], hi = box.max[axis];
+    const dir = new THREE.Vector3(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0).applyQuaternion(this.pivot.quaternion);
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < 8; i++) {
+      const d = new THREE.Vector3(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).dot(dir);
+      lo = Math.min(lo, d); hi = Math.max(hi, d);
+    }
     const at = lo + (hi - lo) * t;
-    this.section.setFromNormalAndCoplanarPoint(n, new THREE.Vector3().setComponent('xyz'.indexOf(axis), at));
+    this.section.setFromNormalAndCoplanarPoint(dir.clone().multiplyScalar(flip ? 1 : -1), dir.clone().multiplyScalar(at));
+    // translucent cutting-plane marker, sized to the model so it reads as a plane
+    const p = this.sectionPlane;
+    p.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
+    p.position.copy(dir).multiplyScalar(at);
+    p.scale.setScalar(Math.max(1, box.getSize(new THREE.Vector3()).length() * 0.6));
+    return { at: at - lo, span: hi - lo };
+  }
+
+  private makeSectionPlane() {
+    const g = new THREE.Group();
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({ color: 0xf0a23a, transparent: true, opacity: 0.1, side: THREE.DoubleSide, depthWrite: false }));
+    const edge = new THREE.LineSegments(new THREE.EdgesGeometry(quad.geometry), new THREE.LineBasicMaterial({ color: 0xf0a23a }));
+    g.add(quad, edge);
+    g.visible = false;
+    return g;
   }
 
   // ---------- visibility / selection ----------
@@ -233,7 +278,23 @@ export class Viewer {
     const mesh = h.object as THREE.Mesh;
     const local = mesh.worldToLocal(h.point.clone());
     const normal = h.face ? h.face.normal.clone() : new THREE.Vector3(0, 0, 1);
-    return { mesh, part: mesh.userData.part, local, normal, world: h.point.clone() };
+    return { mesh, part: mesh.userData.part, local, normal, world: h.point.clone(), snapped: this.snap(h, ndc) };
+  }
+
+  /** Snap a tap to the nearest corner of the triangle it hit when that corner is within a fingertip. */
+  private snap(h: THREE.Intersection, ndc: THREE.Vector2): THREE.Vector3 | undefined {
+    if (!h.face) return undefined;
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const mesh = h.object as THREE.Mesh;
+    const pos = mesh.geometry.attributes.position;
+    let best: THREE.Vector3 | undefined, bestPx = 14;
+    for (const i of [h.face.a, h.face.b, h.face.c]) {
+      const w = new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld);
+      const p = w.clone().project(this.camera);
+      const px = Math.hypot((p.x - ndc.x) * r.width / 2, (p.y - ndc.y) * r.height / 2);
+      if (px < bestPx) { bestPx = px; best = w; }
+    }
+    return best;
   }
 
   private bindPointer() {
@@ -246,40 +307,13 @@ export class Viewer {
       down = null;
       if (moved > 6) return; // that was an orbit/pan, not a tap
       const hit = this.raycast(e);
-      if (this.mode === 'measure') return this.addMeasure(hit);
+      if (this.mode === 'measure') { this.measure.add(hit); return; }
       this.onPick(hit);
     });
   }
 
   // ---------- measure ----------
-  private addMeasure(hit: Hit | null) {
-    if (!hit) return;
-    if (this.measurePts.length >= 2) this.clearMeasure();
-    this.measurePts.push(hit.world);
-    const dot = new THREE.Mesh(new THREE.SphereGeometry(this.size * 0.006), new THREE.MeshBasicMaterial({ color: 0xffe14d, depthTest: false }));
-    dot.renderOrder = 10;
-    dot.position.copy(hit.world);
-    this.measureObj.add(dot);
-    if (this.measurePts.length === 2) {
-      const [a, b] = this.measurePts;
-      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]), new THREE.LineBasicMaterial({ color: 0xffe14d, depthTest: false }));
-      line.renderOrder = 10;
-      this.measureObj.add(line);
-      const mm = a.distanceTo(b); // setModel scales every model so world units are mm
-      const div = document.createElement('div');
-      div.className = 'measure-label';
-      div.textContent = `${mm.toFixed(2)} mm`;
-      const lbl = new CSS2DObject(div);
-      lbl.position.copy(a).add(b).multiplyScalar(0.5);
-      this.measureObj.add(lbl);
-      this.onMeasure(mm);
-    }
-  }
-  clearMeasure() {
-    this.measurePts = [];
-    for (const c of [...this.measureObj.children]) { this.measureObj.remove(c); if ((c as any).element) (c as any).element.remove(); }
-    this.onMeasure(null);
-  }
+  clearMeasure() { this.measure.clear(); }
 
   // ---------- pins ----------
   private pins = new Map<string, CSS2DObject>();
