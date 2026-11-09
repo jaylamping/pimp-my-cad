@@ -3,12 +3,12 @@ import { Viewer, Hit, Mode, type ExplodeMode } from './viewer';
 import { loadModel, sha256, setNativeStepConverter } from './loaders';
 import * as desktop from './desktop';
 import { PrintChecks, CancelledError, thresholds, legend, type Check } from './checks';
-import { LocalStore, CommentStore, ReviewDoc, ReviewComment, Severity, newId } from './comments';
+import { LocalStore, CommentStore, ReviewDoc, ReviewComment, Severity, newId, fingerprint, mergeDocs, isClosed, upgradeDoc } from './comments';
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => document.querySelector(s) as T;
 const viewer = new Viewer($('#view'));
 const checks = new PrintChecks(viewer);
-const store: CommentStore = desktop.isDesktop ? new desktop.SidecarStore() : new LocalStore();
+const store: CommentStore = desktop.isDesktop ? new desktop.ReviewStore() : new LocalStore();
 
 type LibItem = { title: string; path: string; url: string };
 let library: LibItem[] = [];
@@ -47,8 +47,7 @@ async function open(buf: ArrayBuffer, path: string, title = path.split(/[\\/]/).
   kindSel.value = '';
   $('#chk-msg').textContent = '';
   syncChecks();
-  if (desktop.isDesktop) desktop.setCurrentPath(path);
-  const doc = await store.load(path);
+  const doc = await store.load(path, sha, buf.byteLength);
   current = { path, title, sha, doc };
   draft = null; activeId = null;
   ($('#explode') as HTMLInputElement).value = '0';
@@ -98,7 +97,9 @@ async function initLibrary() {
 async function openNative(path: string) {
   await open(await desktop.readFile(path), path);
   await desktop.watch(path);
+  reviewWatched = null;
 }
+let reviewWatched: string | null = null; // the review folder may not exist until the first save, so watch again then
 if (desktop.isDesktop) {
   setNativeStepConverter(desktop.convertStep);
   $('#file').addEventListener('click', async (e) => {
@@ -113,6 +114,20 @@ if (desktop.isDesktop) {
     if (current?.path !== p) return;
     await open(await desktop.readFile(p), p);
     status(`${fileStatus} · reloaded ${new Date().toLocaleTimeString()}`);
+  });
+  // An agent (or another window) edited the review file: pick up its changes.
+  desktop.onReviewChanged(async (p) => {
+    const cur = current;
+    if (cur?.path !== p) return;
+    const disk = await (store as desktop.ReviewStore).peek(p);
+    if (!disk || current !== cur) return; // the user opened another model while we were reading
+    // versions can tie while contents differ, so merge by comment id and compare contents
+    const merged = mergeDocs(disk, cur.doc);
+    const key = (d: ReviewDoc) => JSON.stringify([d.comments, d.deleted ?? []]);
+    if (key(merged) === key(cur.doc)) return;
+    Object.assign(cur.doc, merged);
+    buildTree();
+    renderComments();
   });
 }
 
@@ -149,7 +164,7 @@ function buildTree() {
     const li = document.createElement('li');
     li.dataset.part = m.userData.part;
     const col = '#' + (m.userData.baseColor as number).toString(16).padStart(6, '0');
-    const n = current!.doc.comments.filter((c) => c.part === m.userData.part && c.status === 'open').length;
+    const n = current!.doc.comments.filter((c) => c.part === m.userData.part && !isClosed(c)).length;
     li.innerHTML = `<input type="checkbox" ${m.visible ? 'checked' : ''}/><span class="sw" style="background:${col}"></span>
       <span class="nm" title="${esc(m.userData.part)}">${esc(m.name)}</span>
       ${m.userData.kind === 'modifier' ? '<span class="mod">modifier</span>' : ''}${n ? `<span class="cnt">${n}</span>` : ''}`;
@@ -234,20 +249,38 @@ $('#c-cancel').onclick = () => { hideComposer(); renderComments(); };
 $<HTMLFormElement>('#composer').onsubmit = async (e) => {
   e.preventDefault();
   if (!draft || !current) return;
+  const now = new Date().toISOString();
   const c: ReviewComment = {
     id: newId(), part: draft.part,
     anchor: { p: round(draft.local.toArray()), n: round(draft.normal.toArray()) },
     severity, text: $<HTMLTextAreaElement>('#c-text').value.trim(),
     fix: $<HTMLTextAreaElement>('#c-fix').value.trim() || undefined,
-    status: 'open', author: author(), created: new Date().toISOString(), rev: current.sha,
+    selectors: selectorsFor(draft),
+    status: 'open', author: author(), created: now, updated: now, rev: current.sha,
   };
   current.doc.comments.push(c);
   await store.save(current.doc);
+  if (desktop.isDesktop && reviewWatched !== current.path) { reviewWatched = current.path; desktop.watch(current.path).catch((err) => console.warn('could not watch the review file', err)); }
   hideComposer();
   activeId = c.id;
   buildTree();
   renderComments();
 };
+function selectorsFor(hit: Hit): ReviewComment['selectors'] {
+  const g = hit.mesh.geometry;
+  g.computeBoundingBox();
+  const b = g.boundingBox!;
+  const c = b.getCenter(new THREE.Vector3());
+  const size = b.getSize(new THREE.Vector3());
+  const tris = g.index ? g.index.count / 3 : g.attributes.position.count / 3;
+  return {
+    partName: hit.mesh.name,
+    bbox: round6([b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z]),
+    centroid: round(c.toArray()),
+    fingerprint: fingerprint(g.attributes.position.count, tris, round(size.toArray())),
+  };
+}
+const round6 = (a: number[]) => a.map((v) => Math.round(v * 1000) / 1000) as [number, number, number, number, number, number];
 const round = (a: number[]) => a.map((v) => Math.round(v * 1000) / 1000) as [number, number, number];
 
 // ---------- comment list + pins ----------
@@ -255,12 +288,12 @@ function visibleComments(): ReviewComment[] {
   if (!current) return [];
   const f = $<HTMLSelectElement>('#filter').value;
   return current.doc.comments.filter((c) =>
-    f === 'all' ? true : f === 'part' ? c.part === viewer.selected?.userData.part : c.status === 'open');
+    f === 'all' ? true : f === 'part' ? c.part === viewer.selected?.userData.part : !isClosed(c));
 }
 function drawPins() {
   if (!current) return;
   current.doc.comments.forEach((c, i) => {
-    const cls = c.status === 'open' ? c.severity : 'done';
+    const cls = isClosed(c) ? 'done' : c.severity;
     viewer.addPin(c.id, String(i + 1), c.part, c.anchor.p, cls, () => focusComment(c.id));
   });
   viewer.highlightPin(activeId);
@@ -273,18 +306,18 @@ function renderComments() {
   ol.innerHTML = '';
   if (!current) return;
   const all = current.doc.comments;
-  $('#open-count').textContent = String(all.filter((c) => c.status === 'open').length || '');
+  $('#open-count').textContent = String(all.filter((c) => !isClosed(c)).length || '');
   for (const c of visibleComments()) {
     const n = all.indexOf(c) + 1;
     const li = document.createElement('li');
-    li.className = `${c.severity} ${c.status !== 'open' ? 'done' : ''} ${c.id === activeId ? 'active' : ''} ${c.rev !== current.sha ? 'stale' : ''}`;
+    li.className = `${esc(c.severity)} ${isClosed(c) ? 'done' : ''} ${c.id === activeId ? 'active' : ''} ${c.rev !== current.sha ? 'stale' : ''}`;
     const missing = !viewer.meshes.some((m) => m.userData.part === c.part);
-    li.innerHTML = `<div class="meta"><b>#${n}</b><span>${c.severity}</span><span>${esc(c.part.split('/').pop()!)}</span>
-        <span>${esc(c.author)}</span><span>${new Date(c.created).toLocaleString()}</span>${c.status !== 'open' ? `<span>${c.status}</span>` : ''}
+    li.innerHTML = `<div class="meta"><b>#${n}</b><span>${esc(c.severity)}</span><span>${esc(c.part.split('/').pop()!)}</span>
+        <span>${esc(c.author)}</span><span>${new Date(c.created).toLocaleString()}</span>${c.status !== 'open' ? `<span>${esc(c.status)}</span>` : ''}
         ${missing ? '<span style="color:var(--blocker)">part not in this file</span>' : ''}</div>
       <div class="txt">${esc(c.text)}</div>${c.fix ? `<div class="fix">${esc(c.fix)}</div>` : ''}
       ${c.resolved?.note ? `<div class="meta">Resolution: ${esc(c.resolved.note)}</div>` : ''}
-      <div class="acts">${c.status === 'open'
+      <div class="acts">${c.status !== 'fixed' && c.status !== 'wontfix'
         ? '<button data-a="fixed" class="btn">Fixed</button><button data-a="wontfix" class="btn">Won\'t fix</button>'
         : '<button data-a="open" class="btn">Reopen</button>'}
         <button data-a="link" class="btn">Link</button><button data-a="del" class="btn">Delete</button></div>`;
@@ -302,17 +335,19 @@ async function act(c: ReviewComment, a: string) {
   if (a === 'del') {
     if (!confirm('Delete this comment?')) return;
     current.doc.comments = current.doc.comments.filter((x) => x !== c);
+    current.doc.deleted = [...(current.doc.deleted ?? []), c.id];
   } else if (a === 'link') {
     setHash({ file: current.path, c: c.id });
     await navigator.clipboard?.writeText(location.href).catch(() => {});
     status('Link copied');
     return;
   } else if (a === 'open') {
-    c.status = 'open'; delete c.resolved;
+    c.status = 'open'; delete c.resolved; c.updated = new Date().toISOString();
   } else {
     const note = prompt(a === 'fixed' ? 'How was it fixed? (optional)' : 'Why not? (optional)') ?? undefined;
     c.status = a as 'fixed' | 'wontfix';
     c.resolved = { by: author(), at: new Date().toISOString(), rev: current.sha, note: note || undefined };
+    c.updated = c.resolved.at;
   }
   await store.save(current.doc);
   buildTree();
@@ -341,9 +376,10 @@ $('#export').onclick = () => {
 $<HTMLInputElement>('#import').onchange = async (e) => {
   const f = (e.target as HTMLInputElement).files?.[0];
   if (!f || !current) return;
-  const doc = JSON.parse(await f.text()) as ReviewDoc;
+  const doc = upgradeDoc(JSON.parse(await f.text()), current.doc.file);
   const have = new Set(current.doc.comments.map((c) => c.id));
-  for (const c of doc.comments) if (!have.has(c.id)) current.doc.comments.push(c);
+  const gone = new Set(current.doc.deleted ?? []);
+  for (const c of doc.comments) if (!have.has(c.id) && !gone.has(c.id)) current.doc.comments.push(c);
   await store.save(current.doc);
   buildTree(); renderComments();
 };
