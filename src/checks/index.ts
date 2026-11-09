@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { buildSoup, sources, queryTris, type Soup } from './soup';
 import * as cpu from './cpu';
 import { colour, legend, thresholds, type Check } from './colors';
-import type { GpuChecks } from './gpu';
+import type { GpuClient } from './gpuClient';
 import { CpuRunner } from './cpuRunner';
 import type { Viewer } from '../viewer';
 
@@ -18,7 +18,8 @@ export type Report = { ms: number; samples: number; engine: 'webgpu' | 'cpu'; ou
  * Results are per sample = per display vertex, painted into vertex colours.
  */
 export class PrintChecks {
-  private gpu: GpuChecks | null | undefined; // undefined = not tried yet
+  private gpu: GpuClient | null | undefined; // undefined = not tried yet
+  private gpuInit: Promise<GpuClient | null> | null = null;
   private baseline: Soup | null = null;
   private cache = new Map<Check, { soupId: number; values: Float32Array }>();
   private soup: Soup | null = null;
@@ -26,12 +27,14 @@ export class PrintChecks {
   /** Bumped by anything that invalidates in-flight runs (new run, clear, reset, baseline change). */
   private gen = 0;
   private cpuRunner = new CpuRunner();
+  /** Instanced meshes can't hold per-instance vertex colours, so each gets a baked child mesh while an overlay is shown. */
+  private proxies = new Map<THREE.InstancedMesh, { proxy: THREE.Mesh; material: THREE.Material | THREE.Material[]; count: number }>();
   onBaseline: (label: string | null) => void = () => {};
 
   constructor(private viewer: Viewer) {}
 
   /** The model was replaced: drop everything tied to the old meshes (keeps the baseline). */
-  reset() { this.gen++; this.cpuRunner.cancel(); this.soup = null; this.cache.clear(); this.active = null; }
+  reset() { this.dropProxies(); this.gen++; this.cpuRunner.cancel(); this.soup = null; this.cache.clear(); this.active = null; }
 
   hasBaseline() { return !!this.baseline; }
 
@@ -48,9 +51,12 @@ export class PrintChecks {
     this.onBaseline(label);
   }
 
-  private async engine(): Promise<GpuChecks | null> {
+  private async engine(): Promise<GpuClient | null> {
+    if (this.gpu && !this.gpu.alive) this.gpu = null; // worker crashed: CPU from now on
     if (this.gpu === undefined) {
-      try { this.gpu = await (await import('./gpu')).GpuChecks.create(); } catch (e) { console.warn(e); this.gpu = null; }
+      // one init shared by overlapping runs, so a second run can't spawn (and leak) a second worker
+      this.gpuInit ??= import('./gpuClient').then((m) => m.GpuClient.create()).catch((e) => { console.warn(e); return null; });
+      this.gpu = await this.gpuInit;
     }
     return this.gpu;
   }
@@ -58,6 +64,7 @@ export class PrintChecks {
   async run(kind: Check, progress?: (f: number) => void): Promise<Report> {
     const t0 = performance.now();
     const my = ++this.gen;
+    this.gpu?.cancelPending(); // queued jobs of superseded runs must not delay this one
     const stale = () => { if (my !== this.gen) throw new CancelledError(); };
     const soup = buildSoup(this.viewer.meshes, this.viewer.frameOffset());
     if (!queryTris(soup).length) throw new Error('Nothing visible to check');
@@ -80,7 +87,6 @@ export class PrintChecks {
           res = kind === 'wall' ? await gpu.wall(soup) : await gpu.distance(soup, baseline!);
           engine = 'webgpu';
         } catch (e) { console.warn('GPU check failed, using CPU', e); }
-        if (kind === 'wall') gpu.forget(soup.id); // per-run BVH; the baseline's is kept until replaced
       }
       stale();
       if (!res) res = await this.cpuRunner.run(kind, soup, baseline, prog);
@@ -111,6 +117,17 @@ export class PrintChecks {
     const c = new THREE.Color();
     for (const r of soup.ranges) {
       const m = r.mesh;
+      if ((m as THREE.InstancedMesh).isInstancedMesh) {
+        const proxy = this.proxyFor(m as THREE.InstancedMesh);
+        const col = proxy.geometry.getAttribute('color') as THREE.BufferAttribute;
+        const a = col.array as Float32Array;
+        for (let i = 0; i < r.count; i++) {
+          colour(kind, values[r.start + i], c);
+          a[i * 3] = c.r; a[i * 3 + 1] = c.g; a[i * 3 + 2] = c.b;
+        }
+        col.needsUpdate = true;
+        continue;
+      }
       if (!sources.has(m)) {
         // per-instance, non-indexed copy so shared geometry can hold different colours
         const src = m.geometry;
@@ -131,10 +148,62 @@ export class PrintChecks {
     }
   }
 
+  /** Child mesh with every instance baked in (mesh-local space), plus a colour attribute. */
+  private proxyFor(im: THREE.InstancedMesh): THREE.Mesh {
+    const old = this.proxies.get(im);
+    if (old && old.count === im.count) return old.proxy;
+    if (old) this.dropProxies();
+    const src = im.geometry;
+    const pos = src.getAttribute('position');
+    const idx = src.index;
+    const n = idx ? idx.count : pos.count;
+    const out = new Float32Array(n * im.count * 3);
+    const mtx = new THREE.Matrix4(), v = new THREE.Vector3();
+    for (let c = 0; c < im.count; c++) {
+      im.getMatrixAt(c, mtx);
+      for (let i = 0; i < n; i++) {
+        v.fromBufferAttribute(pos, idx ? idx.getX(i) : i).applyMatrix4(mtx);
+        out.set([v.x, v.y, v.z], (c * n + i) * 3);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(out, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(out.length), 3));
+    g.computeVertexNormals(); // non-indexed: flat shading, like the other overlays
+    const original = im.material;
+    const base = original as THREE.MeshStandardMaterial;
+    const mat = base.clone();
+    mat.clippingPlanes = base.clippingPlanes; // clone() copies the planes; the section tool mutates the originals
+    mat.vertexColors = true; mat.color.setRGB(1, 1, 1);
+    const proxy = new THREE.Mesh(g, mat);
+    proxy.matrixAutoUpdate = false;
+    proxy.userData.printCheckProxy = true;
+    im.add(proxy);
+    // Hide the real instances by swapping in an invisible material: the original may be shared with other meshes.
+    // A clone keeps emissive/side, which select() and picking still use on this mesh.
+    const hidden = base.clone();
+    hidden.visible = false;
+    im.material = hidden;
+    this.proxies.set(im, { proxy, material: original, count: im.count });
+    return proxy;
+  }
+
+  private dropProxies() {
+    for (const [im, { proxy, material }] of this.proxies) {
+      im.remove(proxy);
+      proxy.geometry.dispose();
+      (proxy.material as THREE.Material).dispose();
+      (im.material as THREE.Material).dispose();
+      im.material = material;
+    }
+    this.proxies.clear();
+  }
+
   /** Back to the normal part colours. */
   clear() {
     this.gen++;
     this.cpuRunner.cancel();
+    this.dropProxies();
     for (const m of this.viewer.meshes) {
       const src = sources.get(m);
       if (!src) continue;
