@@ -39,6 +39,25 @@
         </div>
         <input id="sec-pos" type="range" min="0" max="1" step="0.002" value="0.5" />
       </section>
+      <section id="checks">
+        <h3>Print checks</h3>
+        <div class="row">
+          <select id="chk-kind">
+            <option value="">Off</option><option value="overhang">Overhang</option>
+            <option value="wall">Wall thickness</option><option value="distance">Distance to baseline</option>
+          </select>
+          <button id="chk-run" class="btn" title="Recompute">Run</button>
+        </div>
+        <div class="row" id="chk-th-overhang" hidden><label class="chk">Limit <input id="th-overhang" type="number" min="20" max="80" step="5" value="45" />°</label></div>
+        <div class="row" id="chk-th-wall" hidden><label class="chk">Thin below <input id="th-wall" type="number" min="0.1" max="10" step="0.1" value="1.2" /> mm</label></div>
+        <div class="row" id="chk-th-distance" hidden>
+          <button id="chk-base" class="btn" title="Use the model as it is now as the older revision">Set baseline</button>
+          <label class="chk">± <input id="th-dist" type="number" min="0.05" max="20" step="0.05" value="0.5" /> mm</label>
+        </div>
+        <div id="chk-base-info" class="hint"></div>
+        <div id="chk-legend" hidden><div class="bar"></div><div class="ticks"></div></div>
+        <div id="chk-msg" class="hint"></div>
+      </section>
       <section>
         <h3>Parts <label class="chk small"><input id="show-mod" type="checkbox" checked />modifiers</label></h3>
         <ul id="tree"></ul>
