@@ -9,14 +9,14 @@ A browser app for reviewing 3D parts and assemblies: open a file, spin it around
 - **Opens** Bambu Studio / generic **3MF** (multi-file production extension, part names, modifier volumes and their per-part slicer overrides), **STEP** assemblies (full part tree, see below), **STL**, and **GLB/glTF**. Drag a file onto the page, use **File**, or list files in `public/library.json`.
 - **STEP assemblies:** the local server converts a `.step` / `.stp` to GLB with OpenCascade ([tools/step2glb](tools/step2glb/README.md)), keeping every sub-assembly and part instance by its CAD name (`arm/upper_arm-1/bracket-2`). Explode moves sub-assemblies out as units, then spreads their parts; comments stick to the instance. Conversions are cached by file hash, and comments are keyed to the STEP's hash, so re-converting never orphans them.
 - **View:** orbit / pan / zoom (mouse or touch), named views, fit, explode slider, section plane on X/Y/Z with flip, part tree with show/hide (double-click to isolate), modifiers toggle.
-- **Measure:** tap two points, distance in mm.
+- **Measure:** tap two points for distance in mm with ΔX/ΔY/ΔZ (taps snap to nearby corners), or switch to **Face angle** to tap two faces for the angle, or the gap if they are parallel. Measurements follow their parts under explode; **Undo** (`Z`) removes the last, **Clear** removes all.
 - **Comment:** pick **Comment**, tap a spot on a part, write what's wrong, choose a severity (blocker/major/minor/note) and an optional suggested fix. Pins stay attached to that part, so they move with the explode. Mark comments fixed or won't-fix with a note, reopen, or copy a deep link (`#file=<path>&c=<id>`).
 - **Revisions:** the app hashes every file it opens (SHA-256). Each comment records the revision it was written against and is flagged "older rev" once the file changes.
 - Phone layout: Parts and Notes panels slide in from the sides.
 
 Comments are stored in the browser (localStorage) for now, with Export/Import JSON. Saving straight into a git repo is next.
 
-Keyboard: `S` select, `C` comment, `M` measure, `F` fit, `Esc` cancel.
+Keyboard: `S` select, `C` comment, `M` measure, `F` fit, `Z` undo measurement, `Esc` cancel.
 
 ## Comment format
 
@@ -43,7 +43,7 @@ One document per reviewed file. `part` is the node path inside the file; `anchor
 }
 ```
 
-`status` is `open`, `fixed` or `wontfix`; closed comments carry `resolved: { by, at, rev, note }`.
+`status` is `open`, `claimed`, `proposed`, `suggested` (the last three are set by agents), `fixed` or `wontfix` (set by a person); closed comments carry `resolved: { by, at, rev, note }`.
 
 ## Develop
 

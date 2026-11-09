@@ -76,7 +76,9 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .pin.active { outline: 3px solid #fff; }
 .pin.draft { background: #fff; animation: pulse 1s infinite alternate; }
 @keyframes pulse { to { transform: translate(0, -100%) scale(1.2); } }
-.measure-label { background: #111c; color: #ffe14d; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+.hint { font-size: 11px; color: var(--dim); margin-top: 4px; }
+#measure .row { margin-top: 6px; }
+.measure-label { white-space: nowrap; background: #111c; color: #ffe14d; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
 #drop { position: fixed; inset: 0; display: none; place-items: center; background: #000a; font-size: 22px; z-index: 9; }
 body.dragging #drop { display: grid; }
 .mobile { display: none; }

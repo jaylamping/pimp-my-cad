@@ -4,3 +4,8 @@ public/library.local.json
 public/samples
 vite.log
 __pycache__/
+build
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+src-tauri/target
+src-tauri/gen

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:lan": "vite --host",
+    "test:review": "node --experimental-strip-types --test tests/reviewdoc.test.mjs",
     "test:step": "python3 tools/step2glb/test_step2glb.py",
     "build": "tsc -p . && vite build",
     "preview": "vite preview",
