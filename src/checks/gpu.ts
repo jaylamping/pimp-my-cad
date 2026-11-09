@@ -3,11 +3,14 @@ import * as THREE from 'three';
 import { WebGPURenderer, StorageBufferAttribute } from 'three/webgpu';
 import { Fn, storage, instanceIndex, float, wgslFn } from 'three/tsl';
 import { BVHComputeData } from 'three-mesh-bvh/webgpu';
-import { toVec4, queryTris, type Soup } from './soup';
+import { toVec4, type SoupData } from './soup';
 import { WALL_MAX } from './cpu';
 import { buildPseudo, signAt, type Pseudo } from './pseudo';
 
 /**
+ * Lives in `gpu.worker.ts`, so building the BVH, packing it, dispatching and the CPU sign pass
+ * never block the UI thread.
+ *
  * GPU wall thickness and distance-to-baseline: three TSL compute + three-mesh-bvh's WGSL BVH
  * (benchmarked in the GPU bench spike: ~1.7x faster than gpu.js WebGPU at 4.7M samples, 50-400x
  * faster than the CPU). Runs on its own WebGPURenderer that is never attached to the page, so
@@ -26,10 +29,11 @@ export class GpuChecks {
 
   /** Returns null when this webview has no real WebGPU (BVH queries need it). */
   static async create(): Promise<GpuChecks | null> {
-    if (!('gpu' in navigator)) return null;
+    if (typeof navigator === 'undefined' || !('gpu' in navigator)) return null;
     let renderer: WebGPURenderer | undefined;
     try {
-      renderer = new WebGPURenderer({ antialias: false } as never);
+      // Runs inside gpu.worker.ts (no DOM): hand the renderer an OffscreenCanvas it never draws to.
+      renderer = new WebGPURenderer({ antialias: false, canvas: new OffscreenCanvas(1, 1) } as never);
       await renderer.init();
       if (!(renderer.backend as any).isWebGPUBackend) { renderer.dispose(); return null; }
       return new GpuChecks(renderer);
@@ -40,10 +44,10 @@ export class GpuChecks {
     }
   }
 
-  private bvh(s: Soup): BVHComputeData {
+  private bvh(s: SoupData): BVHComputeData {
     let d = this.bvhs.get(s.id);
     if (!d) {
-      const g = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(queryTris(s), 3));
+      const g = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(s.tris, 3));
       d = new BVHComputeData(new THREE.Mesh(g), { attributes: { position: 'vec4f' } });
       d.update();
       this.bvhs.set(s.id, d);
@@ -58,10 +62,14 @@ export class GpuChecks {
     this.pseudos.delete(id);
   }
 
+  /** Largest storage binding the device offers (bytes). */
+  get maxBinding(): number {
+    return (this.renderer.backend as any).device?.limits?.maxStorageBufferBindingSize ?? 128 * 1024 * 1024;
+  }
+
   /** False when the sample buffers would exceed the device's storage-binding limit (or its BVH is too big). */
   fits(sampleCount: number): boolean {
-    const limit = (this.renderer.backend as any).device?.limits?.maxStorageBufferBindingSize ?? 128 * 1024 * 1024;
-    return sampleCount * 16 <= limit && sampleCount < 3 * 5_000_000; // vertex ids travel as f32
+    return sampleCount * 16 <= this.maxBinding && sampleCount < 3 * 5_000_000; // vertex ids travel as f32
   }
 
   private async run(n: number, inputs: Buf[], kernel: (out: any) => any, itemSize = 1): Promise<Float32Array> {
@@ -79,7 +87,7 @@ export class GpuChecks {
     }
   }
 
-  wall(s: Soup): Promise<Float32Array> {
+  wall(s: SoupData): Promise<Float32Array> {
     const data = this.bvh(s);
     const smp = buf(toVec4(s.samples), 4, 'vec4');
     const nrm = buf(toVec4(s.normals), 4, 'vec4');
@@ -104,10 +112,10 @@ export class GpuChecks {
    * the closest feature (unsigned distance, vertex index, barycentrics); the sign comes from the
    * baseline's angle-weighted pseudonormals on the CPU, which is robust at sharp edges and vertices.
    */
-  async distance(s: Soup, baseline: Soup): Promise<Float32Array> {
+  async distance(s: SoupData, baseline: SoupData): Promise<Float32Array> {
     const data = this.bvh(baseline);
     let ps = this.pseudos.get(baseline.id);
-    if (!ps) this.pseudos.set(baseline.id, (ps = buildPseudo(queryTris(baseline))));
+    if (!ps) this.pseudos.set(baseline.id, (ps = buildPseudo(baseline.tris)));
     const smp = buf(toVec4(s.samples), 4, 'vec4');
     const query = wgslFn(/* wgsl */ `
       fn distQuery( p: vec3f ) -> vec4f {

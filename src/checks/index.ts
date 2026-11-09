@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { buildSoup, sources, queryTris, type Soup } from './soup';
 import * as cpu from './cpu';
 import { colour, legend, thresholds, type Check } from './colors';
-import type { GpuChecks } from './gpu';
+import type { GpuClient } from './gpuClient';
 import { CpuRunner } from './cpuRunner';
 import type { Viewer } from '../viewer';
 
@@ -18,7 +18,7 @@ export type Report = { ms: number; samples: number; engine: 'webgpu' | 'cpu'; ou
  * Results are per sample = per display vertex, painted into vertex colours.
  */
 export class PrintChecks {
-  private gpu: GpuChecks | null | undefined; // undefined = not tried yet
+  private gpu: GpuClient | null | undefined; // undefined = not tried yet
   private baseline: Soup | null = null;
   private cache = new Map<Check, { soupId: number; values: Float32Array }>();
   private soup: Soup | null = null;
@@ -26,6 +26,8 @@ export class PrintChecks {
   /** Bumped by anything that invalidates in-flight runs (new run, clear, reset, baseline change). */
   private gen = 0;
   private cpuRunner = new CpuRunner();
+  /** Instanced meshes can't hold per-instance vertex colours, so each gets a baked child mesh while an overlay is shown. */
+  private proxies = new Map<THREE.InstancedMesh, THREE.Mesh>();
   onBaseline: (label: string | null) => void = () => {};
 
   constructor(private viewer: Viewer) {}
@@ -48,9 +50,9 @@ export class PrintChecks {
     this.onBaseline(label);
   }
 
-  private async engine(): Promise<GpuChecks | null> {
+  private async engine(): Promise<GpuClient | null> {
     if (this.gpu === undefined) {
-      try { this.gpu = await (await import('./gpu')).GpuChecks.create(); } catch (e) { console.warn(e); this.gpu = null; }
+      try { this.gpu = await (await import('./gpuClient')).GpuClient.create(); } catch (e) { console.warn(e); this.gpu = null; }
     }
     return this.gpu;
   }
@@ -80,7 +82,6 @@ export class PrintChecks {
           res = kind === 'wall' ? await gpu.wall(soup) : await gpu.distance(soup, baseline!);
           engine = 'webgpu';
         } catch (e) { console.warn('GPU check failed, using CPU', e); }
-        if (kind === 'wall') gpu.forget(soup.id); // per-run BVH; the baseline's is kept until replaced
       }
       stale();
       if (!res) res = await this.cpuRunner.run(kind, soup, baseline, prog);
@@ -111,6 +112,17 @@ export class PrintChecks {
     const c = new THREE.Color();
     for (const r of soup.ranges) {
       const m = r.mesh;
+      if ((m as THREE.InstancedMesh).isInstancedMesh) {
+        const proxy = this.proxyFor(m as THREE.InstancedMesh);
+        const col = proxy.geometry.getAttribute('color') as THREE.BufferAttribute;
+        const a = col.array as Float32Array;
+        for (let i = 0; i < r.count; i++) {
+          colour(kind, values[r.start + i], c);
+          a[i * 3] = c.r; a[i * 3 + 1] = c.g; a[i * 3 + 2] = c.b;
+        }
+        col.needsUpdate = true;
+        continue;
+      }
       if (!sources.has(m)) {
         // per-instance, non-indexed copy so shared geometry can hold different colours
         const src = m.geometry;
@@ -131,10 +143,51 @@ export class PrintChecks {
     }
   }
 
+  /** Child mesh with every instance baked in (mesh-local space), plus a colour attribute. */
+  private proxyFor(im: THREE.InstancedMesh): THREE.Mesh {
+    let proxy = this.proxies.get(im);
+    if (proxy) return proxy;
+    const src = im.geometry;
+    const pos = src.getAttribute('position');
+    const idx = src.index;
+    const n = idx ? idx.count : pos.count;
+    const out = new Float32Array(n * im.count * 3);
+    const mtx = new THREE.Matrix4(), v = new THREE.Vector3();
+    for (let c = 0; c < im.count; c++) {
+      im.getMatrixAt(c, mtx);
+      for (let i = 0; i < n; i++) {
+        v.fromBufferAttribute(pos, idx ? idx.getX(i) : i).applyMatrix4(mtx);
+        out.set([v.x, v.y, v.z], (c * n + i) * 3);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(out, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(out.length), 3));
+    g.computeVertexNormals(); // non-indexed: flat shading, like the other overlays
+    const base = im.material as THREE.MeshStandardMaterial;
+    const mat = base.clone();
+    mat.clippingPlanes = base.clippingPlanes; // clone() copies the planes; the section tool mutates the originals
+    mat.vertexColors = true; mat.color.setRGB(1, 1, 1);
+    proxy = new THREE.Mesh(g, mat);
+    proxy.matrixAutoUpdate = false;
+    proxy.userData.printCheckProxy = true;
+    im.add(proxy);
+    base.visible = false; // hide the real instances; the baked copy draws in their place
+    this.proxies.set(im, proxy);
+    return proxy;
+  }
+
   /** Back to the normal part colours. */
   clear() {
     this.gen++;
     this.cpuRunner.cancel();
+    for (const [im, proxy] of this.proxies) {
+      im.remove(proxy);
+      proxy.geometry.dispose();
+      (proxy.material as THREE.Material).dispose();
+      (im.material as THREE.Material).visible = true;
+    }
+    this.proxies.clear();
     for (const m of this.viewer.meshes) {
       const src = sources.get(m);
       if (!src) continue;

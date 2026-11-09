@@ -26,6 +26,20 @@ export type Soup = {
   ranges: { mesh: THREE.Mesh; start: number; count: number }[];
 };
 
+/** What a worker needs from a soup: plain typed arrays (structured-cloneable, no meshes). */
+export type SoupData = {
+  id: number;
+  sampleCount: number;
+  samples: Float32Array;
+  normals: Float32Array;
+  /** `queryTris(soup)`: finite, non-degenerate triangles the BVH is built from. */
+  tris: Float32Array;
+};
+
+export function soupData(s: Soup): SoupData {
+  return { id: s.id, sampleCount: s.sampleCount, samples: s.samples, normals: s.normals, tris: queryTris(s) };
+}
+
 let nextId = 1;
 
 /** Overlay bookkeeping lives here, not in `mesh.userData`: imported glTF extras fill userData. */
@@ -52,24 +66,34 @@ export function queryTris(s: Soup): Float32Array {
 
 /** `origin` is the viewer's pivot offset: removed so a re-exported revision lines up with its baseline. */
 export function buildSoup(meshes: THREE.Mesh[], origin = new THREE.Vector3(), includeHidden = false): Soup {
-  const parts: { mesh: THREE.Mesh; pos: Float32Array; flip: boolean }[] = [];
+  const parts: { mesh: THREE.Mesh; pos: Float32Array; flips: boolean[]; trisPerCopy: number }[] = [];
   let total = 0;
   const v = new THREE.Vector3();
+  const inst = new THREE.Matrix4(), world = new THREE.Matrix4();
   for (const mesh of meshes) {
     if ((!includeHidden && !mesh.visible) || mesh.userData.kind === 'modifier') continue;
-    if ((mesh as THREE.InstancedMesh).isInstancedMesh) throw new Error('Print checks do not support instanced meshes yet');
     mesh.updateWorldMatrix(true, false);
     const g = sources.get(mesh) ?? mesh.geometry;
     const pos = g.getAttribute('position');
     const idx = g.index;
     const n = idx ? idx.count : pos.count;
-    const out = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) {
-      v.fromBufferAttribute(pos, idx ? idx.getX(i) : i).applyMatrix4(mesh.matrixWorld).sub(origin);
-      out[i * 3] = v.x; out[i * 3 + 1] = v.y; out[i * 3 + 2] = v.z;
+    const im = mesh as THREE.InstancedMesh;
+    const copies = im.isInstancedMesh ? im.count : 1;
+    // An instanced mesh contributes one copy of its geometry per instance, instance-major, in one range.
+    const out = new Float32Array(n * 3 * copies);
+    const flips: boolean[] = [];
+    for (let c = 0; c < copies; c++) {
+      if (im.isInstancedMesh) im.getMatrixAt(c, inst); else inst.identity();
+      world.multiplyMatrices(mesh.matrixWorld, inst);
+      flips.push(world.determinant() < 0);
+      for (let i = 0; i < n; i++) {
+        v.fromBufferAttribute(pos, idx ? idx.getX(i) : i).applyMatrix4(world).sub(origin);
+        const o = (c * n + i) * 3;
+        out[o] = v.x; out[o + 1] = v.y; out[o + 2] = v.z;
+      }
     }
-    parts.push({ mesh, pos: out, flip: mesh.matrixWorld.determinant() < 0 });
-    total += n;
+    parts.push({ mesh, pos: out, flips, trisPerCopy: Math.floor(n / 3) });
+    total += n * copies;
   }
   const triCount = Math.floor(total / 3);
   const tris = new Float32Array(triCount * 9);
@@ -79,9 +103,10 @@ export function buildSoup(meshes: THREE.Mesh[], origin = new THREE.Vector3(), in
   const ranges: Soup['ranges'] = [];
   const e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), n = new THREE.Vector3();
   let t = 0;
-  for (const { mesh, pos, flip } of parts) {
+  for (const { mesh, pos, flips, trisPerCopy } of parts) {
     const start = t * 3;
-    for (let k = 0; k + 8 < pos.length; k += 9, t++) {
+    for (let k = 0, local = 0; k + 8 < pos.length; k += 9, t++, local++) {
+      const flip = flips[Math.floor(local / trisPerCopy)]; // mirrored copy?
       const o = t * 9;
       tris.set(pos.subarray(k, k + 9), o);
       if (flip) { // mirrored instance: world winding is reversed, restore outward orientation for queries
