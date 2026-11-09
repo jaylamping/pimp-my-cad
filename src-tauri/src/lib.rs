@@ -1,8 +1,11 @@
 // Native side of TandemCAD: local files, the STEP converter sidecar, the
-// metadata file next to each opened file, and a file watcher for live reload.
+// review files, and a file watcher for live reload.
 //
-// Comments live in `<file>.tandem.json` beside the opened file (same schema as
-// `ReviewDoc` in src/comments.ts), so agents and git can read them directly.
+// Comments live in `.tandemcad/reviews/<model path>.json` at the workspace root
+// (see reviews.rs; same schema as `ReviewDoc` in src/reviewdoc.ts), so agents
+// and git can read them directly.
+mod reviews;
+
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
@@ -18,7 +21,11 @@ use tauri::{ipc::Response, AppHandle, Emitter, Manager, State};
 type Res<T> = Result<T, String>;
 fn err<E: std::fmt::Display>(e: E) -> String { e.to_string() }
 
-fn sidecar_path(file: &str) -> PathBuf { PathBuf::from(format!("{file}.tandem.json")) }
+/// Folder and file name used for models that sit outside any workspace.
+fn loose(app: &AppHandle, file: &str) -> Res<(PathBuf, String)> {
+    let dir = app.path().app_data_dir().map_err(err)?.join("reviews");
+    Ok((dir, format!("{:x}", Sha256::digest(file.as_bytes()))))
+}
 
 /// Raw bytes of any file (a Response avoids JSON-encoding large buffers).
 #[tauri::command]
@@ -27,19 +34,39 @@ fn read_file(path: String) -> Res<Response> {
 }
 
 #[tauri::command]
-fn load_sidecar(file: String) -> Res<Option<String>> {
-    let p = sidecar_path(&file);
-    if !p.exists() { return Ok(None); }
-    fs::read_to_string(p).map(Some).map_err(err)
+fn load_review(app: AppHandle, file: String) -> Res<Option<String>> {
+    let (dir, key) = loose(&app, &file)?;
+    reviews::read_review(Path::new(&file), &dir, &key).map_err(err)
 }
 
-/// Write via temp file + rename so an agent never reads a half-written file.
+/// Atomic write; the first write in a workspace also creates `.tandemcad/.gitignore` and `AGENTS.md`.
 #[tauri::command]
-fn save_sidecar(file: String, json: String) -> Res<()> {
-    let p = sidecar_path(&file);
-    let tmp = p.with_extension("json.tmp");
-    fs::write(&tmp, json).map_err(err)?;
-    fs::rename(&tmp, &p).map_err(err)
+fn save_review(app: AppHandle, file: String, json: String) -> Res<()> {
+    let (dir, key) = loose(&app, &file)?;
+    reviews::write_review(Path::new(&file), &dir, &key, &json).map(|_| ()).map_err(err)
+}
+
+#[derive(Serialize)]
+struct ReviewEntry { rel: String, json: String, #[serde(rename = "modelExists")] model_exists: bool }
+
+/// All reviews in the workspace of `file`, used to re-link comments after a rename.
+#[tauri::command]
+fn list_reviews(file: String) -> Res<Vec<ReviewEntry>> {
+    Ok(reviews::list_reviews(Path::new(&file)).map_err(err)?
+        .into_iter().map(|e| ReviewEntry { rel: e.rel, json: e.json, model_exists: e.model_exists }).collect())
+}
+
+/// Remove the review stored for `file` (after its comments were moved to a new path).
+#[tauri::command]
+fn delete_review(app: AppHandle, file: String) -> Res<()> {
+    let (dir, key) = loose(&app, &file)?;
+    reviews::delete_review(Path::new(&file), &dir, &key).map_err(err)
+}
+
+/// Path of the workspace root for `file`, if it sits in one.
+#[tauri::command]
+fn workspace_root(file: String) -> Option<String> {
+    reviews::workspace_root(Path::new(&file)).map(|p| p.to_string_lossy().into_owned())
 }
 
 /// Converter: the bundled `step2glb` sidecar next to the app binary if present,
@@ -89,25 +116,40 @@ struct Watch(Mutex<Option<RecommendedWatcher>>);
 #[derive(Clone, Serialize)]
 struct Changed { path: String }
 
-/// Watch the opened file (replaces any previous watch). CAD programs write
-/// in bursts, so events are debounced into one `file-changed` event.
+enum Kind { Model, Review }
+
+/// Watch the opened file and its review file (replaces any previous watch). CAD programs
+/// write in bursts, so events are debounced: one `file-changed` when the model changed,
+/// one `review-changed` when an agent (or the app) wrote the review file.
 #[tauri::command]
 fn watch_file(app: AppHandle, state: State<Watch>, path: String) -> Res<()> {
     let target = PathBuf::from(&path);
     let dir = target.parent().ok_or("no parent folder")?.to_path_buf();
-    let (tx, rx) = std::sync::mpsc::channel::<()>();
-    let t2 = target.clone();
+    let (ldir, key) = loose(&app, &path)?;
+    let review = reviews::review_path(&target, &ldir, &key);
+    let (tx, rx) = std::sync::mpsc::channel::<Kind>();
+    let (t2, r2) = (target.clone(), review.clone());
     let mut w = notify::recommended_watcher(move |ev: notify::Result<notify::Event>| {
         if let Ok(ev) = ev {
-            if ev.paths.iter().any(|p| p == &t2) && !ev.kind.is_access() { let _ = tx.send(()); }
+            if ev.kind.is_access() { return; }
+            if ev.paths.iter().any(|p| p == &t2) { let _ = tx.send(Kind::Model); }
+            if ev.paths.iter().any(|p| p == &r2) { let _ = tx.send(Kind::Review); }
         }
     }).map_err(err)?;
     // watch the folder: many programs save by replacing the file
     w.watch(&dir, RecursiveMode::NonRecursive).map_err(err)?;
+    if let Some(rd) = review.parent() {
+        // only if it exists already; the app calls watch_file again after the first save creates it
+        if rd.is_dir() && rd != dir { let _ = w.watch(rd, RecursiveMode::NonRecursive); }
+    }
     std::thread::spawn(move || {
-        while rx.recv().is_ok() {
-            while rx.recv_timeout(Duration::from_millis(600)).is_ok() {}
-            let _ = app.emit("file-changed", Changed { path: path.clone() });
+        while let Ok(first) = rx.recv() {
+            let (mut model, mut rev) = (matches!(first, Kind::Model), matches!(first, Kind::Review));
+            while let Ok(k) = rx.recv_timeout(Duration::from_millis(600)) {
+                match k { Kind::Model => model = true, Kind::Review => rev = true }
+            }
+            if model { let _ = app.emit("file-changed", Changed { path: path.clone() }); }
+            if rev { let _ = app.emit("review-changed", Changed { path: path.clone() }); }
         }
     });
     *state.0.lock().unwrap() = Some(w);
@@ -119,7 +161,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Watch(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![read_file, load_sidecar, save_sidecar, convert_step, watch_file])
+        .invoke_handler(tauri::generate_handler![read_file, load_review, save_review, list_reviews, delete_review, workspace_root, convert_step, watch_file])
         .run(tauri::generate_context!())
         .expect("error while running TandemCAD");
 }
