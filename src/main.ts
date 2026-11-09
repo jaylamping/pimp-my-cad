@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Viewer, Hit, Mode } from './viewer';
+import { Viewer, Hit, Mode, type ExplodeMode } from './viewer';
 import { loadModel, sha256, setNativeStepConverter } from './loaders';
 import * as desktop from './desktop';
 import { PrintChecks, CancelledError, thresholds, legend, type Check } from './checks';
@@ -53,6 +53,7 @@ async function open(buf: ArrayBuffer, path: string, title = path.split(/[\\/]/).
   draft = null; activeId = null;
   ($('#explode') as HTMLInputElement).value = '0';
   ($('#sec-axis') as HTMLSelectElement).value = '';
+  $('#sec-val').textContent = ''; $('#explode-val').textContent = '';
   hideComposer();
   buildTree();
   renderComments();
@@ -183,8 +184,9 @@ function selectMesh(m: THREE.Mesh | null) {
 function setMode(mode: Mode) {
   viewer.mode = mode;
   for (const b of Array.from(document.querySelectorAll<HTMLButtonElement>('#modes button'))) b.classList.toggle('on', b.dataset.mode === mode);
-  if (mode !== 'measure') viewer.clearMeasure();
-  status(mode === 'pin' ? 'Tap the spot you want to comment on' : mode === 'measure' ? 'Tap two points to measure' : fileStatus);
+  $('#measure').hidden = mode !== 'measure';
+  if (mode !== 'measure') viewer.measure.cancelPending();
+  status(mode === 'pin' ? 'Tap the spot you want to comment on' : mode === 'measure' ? 'Tap two points to measure (snaps to corners)' : fileStatus);
 }
 for (const b of Array.from(document.querySelectorAll<HTMLButtonElement>('#modes button'))) b.onclick = () => setMode(b.dataset.mode as Mode);
 
@@ -196,7 +198,15 @@ viewer.onPick = (hit) => {
   }
   selectMesh(hit?.mesh ?? null);
 };
-viewer.onMeasure = (mm) => { if (mm != null) status(`Distance ${mm.toFixed(2)} mm`); };
+viewer.onMeasure = (t) => { $('#meas-msg').textContent = t ?? ''; if (t) status(t); };
+for (const b of Array.from(document.querySelectorAll<HTMLButtonElement>('#meas-kind button'))) {
+  b.onclick = () => {
+    viewer.measure.setKind(b.dataset.k as 'distance' | 'angle');
+    for (const o of Array.from(document.querySelectorAll('#meas-kind button'))) o.classList.toggle('on', o === b);
+  };
+}
+$('#meas-undo').onclick = () => viewer.measure.undo();
+$('#meas-clear').onclick = () => viewer.clearMeasure();
 
 // ---------- composer ----------
 function startDraft(hit: Hit) {
@@ -339,8 +349,17 @@ $<HTMLInputElement>('#import').onchange = async (e) => {
 };
 
 // ---------- view controls ----------
-$<HTMLInputElement>('#explode').oninput = (e) => viewer.setExplode(+(e.target as HTMLInputElement).value);
-const sec = () => viewer.setSection(($<HTMLSelectElement>('#sec-axis').value || null) as any, +$<HTMLInputElement>('#sec-pos').value, $<HTMLInputElement>('#sec-flip').checked);
+const explode = () => {
+  const f = +$<HTMLInputElement>('#explode').value;
+  viewer.setExplode(f, $<HTMLSelectElement>('#explode-mode').value as ExplodeMode);
+  $('#explode-val').textContent = f ? `${Math.round(f * 100)}%` : '';
+  if ($<HTMLSelectElement>('#sec-axis').value) sec(); // the cut tracks the exploded extent
+};
+$('#explode').oninput = explode; $('#explode-mode').onchange = explode;
+const sec = () => {
+  const r = viewer.setSection(($<HTMLSelectElement>('#sec-axis').value || null) as any, +$<HTMLInputElement>('#sec-pos').value, $<HTMLInputElement>('#sec-flip').checked);
+  $('#sec-val').textContent = r ? `Cut at ${r.at.toFixed(1)} of ${r.span.toFixed(1)} mm` : '';
+};
 $('#sec-axis').onchange = sec; $('#sec-pos').oninput = sec; $('#sec-flip').onchange = sec;
 $<HTMLInputElement>('#show-mod').onchange = (e) => { viewer.showModifiers((e.target as HTMLInputElement).checked); syncTreeChecks(); };
 $<HTMLSelectElement>('#views').onchange = (e) => viewer.view((e.target as HTMLSelectElement).value);
@@ -354,6 +373,7 @@ document.addEventListener('keydown', (e) => {
   if (k === 's') setMode('select');
   if (k === 'c') setMode('pin');
   if (k === 'm') setMode('measure');
+  if (k === 'z' && viewer.mode === 'measure' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat) viewer.measure.undo();
   if (k === 'f') viewer.fit();
   if (k === 'escape') { hideComposer(); setMode('select'); renderComments(); }
 });
